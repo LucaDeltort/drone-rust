@@ -7,7 +7,7 @@ An autonomous drone simulator in Rust. It provides:
 - an occupancy map built in flight;
 - autonomous exploration;
 - A → B navigation on an unknown map;
-- a pose estimated by a Kalman filter;
+- a pose estimated by a Kalman filter, corrected by matching the scans on the map;
 - a headless benchmark that compares all of this in CSV.
 
 The viewer uses Bevy 0.20 and egui. The core (world, sensors, mapping, planning,
@@ -51,7 +51,7 @@ You can combine options. Bevy is slow in debug builds, so use `--release` in cit
 - **Map**: top-down occupancy grid (free / occupied / unknown), the slab altitude, and how well the map matches the terrain.
 - **Exploration**: strategy, status, distance travelled, known area, collisions.
 - **Mission A -> B**: goal, status, predicted and remaining time, distance travelled, D* Lite statistics.
-- **Pose**: pose mode, real error and announced uncertainty. In EKF mode, a magenta ghost shows where the drone *believes* it is, with a 2σ circle.
+- **Pose**: pose mode, real error and announced uncertainty, scan matching on/off. In EKF mode, a magenta ghost shows where the drone *believes* it is, with a 2σ circle.
 - An inset shows the onboard camera view.
 
 ## Maps
@@ -134,6 +134,7 @@ cargo run --release -p bench -- --drones scout,pro --maps corridor,downtown --mi
 | `--a-b-limit` | `120` | max duration of an A → B, s |
 | `--threads` | number of cores | |
 | `--out` | `bench/results.csv` | |
+| `--scan-match` | `on` | `on`, `off`: in `ekf` mode, correct the pose by scan matching |
 
 **Success criteria:**
 - **Exploration**: finished, with no collision, at least 90 % coverage, and at least
@@ -153,45 +154,60 @@ seed 1 and the default limits. The raw data is in [`bench/results.csv`](bench/re
 
 | Mission | `truth` | `ekf-gps` | `ekf` |
 |---|---|---|---|
-| A → B | 22/28 | 23/28 | 7/28 |
-| Exploration, nearest frontier | 11/28 | 6/28 | 0/28 |
-| Exploration, information gain | 12/28 | 9/28 | 0/28 |
+| A → B | 24/28 | 22/28 | 10/28 |
+| Exploration, nearest frontier | 10/28 | 7/28 | 0/28 |
+| Exploration, information gain | 11/28 | 6/28 | 0/28 |
 
 ### Perfect pose (`truth`), by drone
 
 | Drone | A → B | Exploration (both strategies) | Collisions |
 |---|---|---|---|
 | Scout | 7/7 | 11/14 | 0 |
-| Pro | 6/7 | 10/14 | 0 |
+| Pro | 6/7 | 8/14 | 0 |
 | Heavy | 6/7 | 2/14 | 0 |
-| Cheap | 3/7 | 0/14 | 30 |
+| Cheap | 5/7 | 0/14 | 38 |
+
+### Pose error without GPS (`ekf`), by drone
+
+Median RMS error over the 21 runs of each drone. Scan matching needs a lidar or a
+depth camera; the Cheap only has sonars.
+
+| Drone | Without scan matching | With scan matching | A → B |
+|---|---|---|---|
+| Scout | 34 m | 2.9 m | 5/7 |
+| Pro | 35 m | 1.1 m | 5/7 |
+| Heavy | 34 m | 17 m | 0/7 |
+| Cheap | 67 m | 63 m | 0/7 |
 
 ### Takeaways
 
 - **With a perfect pose, the lidar drones fly cleanly.**
   - Scout and Pro have zero collisions on every map, including the four cities.
-  - Their failed explorations are timeouts in the largest cities: the map is correct,
-    but 1200 s is not enough to finish.
+  - Their failed explorations are mostly timeouts in the largest maps: the map is
+    correct and 93–98 % covered, but 1200 s is not enough to finish.
 - **The Heavy never collides, but it is slow in cities.**
   - It is slow (5 m/s) and wide (0.8 m plus margins), and it only sees through a
     forward depth camera and a downward sonar.
-  - At 1200 s it has mapped 50–70 % of downtown, old-town and dense-city.
+  - At 1200 s it has mapped about half of downtown and old-town.
 - **Sonars are not enough.**
   - The Cheap's four sonars miss oblique walls and see little.
-  - Outside the corridor, its coverage stays at 15–40 %, and only 46–89 % of its
+  - Outside the corridor, its coverage stays under 30 %, and only 55–83 % of its
     occupied cells are correct.
-  - It collides, mostly on the hilly procedural maps.
+  - It collides on the hilly procedural maps.
 - **The GPS keeps the estimated pose usable.**
-  - With `ekf-gps`, the median RMS pose error is 0.34 m (0.58 m at most).
-  - A → B does as well as with the perfect pose.
+  - With `ekf-gps`, the median RMS pose error is 0.34 m (0.57 m at most).
+  - A → B does almost as well as with the perfect pose.
   - Exploration loses some runs: an error of a few tens of centimeters is enough to
     blur the walls of a narrow street.
-- **Without GPS, the IMU drift ruins long missions.**
-  - The median RMS error is about 42 m after a 1200 s exploration.
-  - No exploration succeeds, and A → B only works over short distances.
+- **Without GPS, scan matching holds the lidar drones to a few meters.**
+  - It brings the median error of the Scout and the Pro from about 35 m down to
+    1–3 m, and A → B from 7 to 10 successes.
+  - The Heavy's depth camera only sees 87° ahead: few matches, so less gain.
+  - No exploration succeeds yet. Open areas, where nothing is in range, still let
+    the IMU drift, and an error of 1–3 m is enough to fail the 90 % map criterion.
   - The drone sometimes "reaches" B on a map built in the wrong place
     (`B believed reached (wrong pose)`).
-- **Compute is cheap.** One step (estimation + map + decision) takes 0.38 ms in the
+- **Compute is cheap.** One step (estimation + map + decision) takes 0.34 ms in the
   median and under 2 ms on average for every run, while all cores are busy.
 
 ## Architecture
@@ -203,9 +219,9 @@ The project is a Cargo workspace with one crate per layer:
 | `world` | Terrain, obstacles, raycasts and collisions (8 m grid spatial index), procedural cities, drone kinematics |
 | `drone_spec` | RON description of a drone, with validation |
 | `sensors` | 2D lidar, sonar, depth camera; noisy IMU, barometer and GPS |
-| `mapping` | 2D occupancy grid: ray casting, per-cell hit/miss evidence, ambiguous cells |
+| `mapping` | 2D occupancy grid: ray casting, per-cell hit/miss evidence, ambiguous cells; scan-to-map matching (point-to-plane ICP) |
 | `planning` | Frontiers, exploration (nearest / information gain), incremental D* Lite, timed trajectory, safe-speed control |
-| `estimation` | 11-state EKF (position, velocity, yaw, accelerometer and gyro biases) on IMU + barometer + GPS |
+| `estimation` | 11-state EKF (position, velocity, yaw, accelerometer and gyro biases) on IMU + barometer + GPS + scan matching |
 | `sim` | Headless simulation (drone + sensors + estimation + map), shared by tests and the bench |
 | `bench` | Benchmark matrix → CSV |
 | `viewer` | Bevy application |
@@ -229,6 +245,18 @@ The project is a Cargo workspace with one crate per layer:
     usually seen at grazing angles.
 - **Noisy pose.** In `ekf` and `ekf-gps` modes, the map is built in the *estimated*
   pose, so EKF drift shows up directly as a wrong map.
+- **Scan matching.** Each lidar or depth scan is aligned on the map before being
+  added to it, and the result corrects the EKF as a pose measurement (x, z, yaw).
+  - Point-to-plane ICP: a scan endpoint is pulled across the wall it hits, never
+    along it, so a corridor constrains the pose across, not along. Poles and
+    corners give point-to-point constraints.
+  - The map remembers where the hits fell inside each cell. Matching on cell
+    centers instead biases each match by up to half a cell, and the bias feeds back
+    into the map.
+  - Only hits within 70 % of the sensor range are used: the map knows walls up to
+    the range of the previous scans, and the far hits would pull the pose backwards.
+  - The Hessian of the fit gives the measurement covariance. After a stretch with
+    nothing to match, the search widens to 3σ of the pose uncertainty to lock on again.
 
 ## Tests
 
@@ -246,16 +274,20 @@ There are about a hundred tests, for example:
 - full A → B missions, including a wall that appears in flight and an enclosed goal;
 - the EKF: a perfect IMU gives the exact pose, the GPS keeps the error low, and the
   biases are recovered;
+- scan matching: a pose offset is recovered within its covariance, and a scan along a
+  corridor does not slide;
 - the indexed raycast against a brute-force one;
 - the shipped maps all build.
 
 ## Known limitations
 
-- Without GPS, IMU drift corrupts the map on long missions.
+- Without GPS, the pose only holds where scans see structure: in open areas or
+  along featureless corridors, the IMU drift takes over.
 - The Cheap drone's sonars miss walls seen at an angle.
 - The occupancy map is 2D, at flight altitude: the drone never flies under or over
   obstacles.
-- There is no SLAM: the map never corrects the pose.
+- Scan matching is scan-to-map without loop closure: an error made while
+  exploring is written into the map and never undone.
 
 ## License
 

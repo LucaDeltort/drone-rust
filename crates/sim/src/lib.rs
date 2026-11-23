@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use drone_spec::{DroneSpec, Mount, SensorKind, SensorSpec};
 use estimation::{Ekf, EkfConfig};
-use mapping::{Cell, OccupancyGrid};
+use mapping::{Cell, MatchConfig, OccupancyGrid};
 use sensors::{Pose, SensorSuite};
 use world::World;
 use world::drone::{Command, DroneState};
@@ -79,11 +79,15 @@ pub struct SimConfig {
     pub half_slab: f32,
     /// Simulation step, in s.
     pub dt: f32,
+    /// Without GPS, correct the pose by matching each range scan on the map. With a
+    /// GPS it stays off: the GPS already bounds the drift, and scan-to-map matching
+    /// (no loop closure) would hold the pose on a map distorted earlier, against it.
+    pub scan_match: bool,
 }
 
 impl Default for SimConfig {
     fn default() -> Self {
-        Self { mode: PoseMode::Truth, seed: 1, altitude: 2.0, cell_m: 0.25, half_slab: 0.5, dt: 0.01 }
+        Self { mode: PoseMode::Truth, seed: 1, altitude: 2.0, cell_m: 0.25, half_slab: 0.5, dt: 0.01, scan_match: true }
     }
 }
 
@@ -99,6 +103,8 @@ pub struct Sim {
     last_t: Vec<f64>,
     /// Simulation time, in s.
     pub t: f32,
+    /// Steps done: the exact time is `steps × dt` (a cumulated f32 drifts).
+    steps: u64,
     /// Collisions (contact entries).
     pub collisions: u32,
     touching: bool,
@@ -108,6 +114,9 @@ pub struct Sim {
     pub max_error_m: f32,
     /// Cumulative compute time of estimation and mapping.
     pub compute: Duration,
+    /// Scan matches accepted by the EKF, and attempted.
+    pub scan_matches: u32,
+    pub scan_attempts: u32,
 }
 
 impl Sim {
@@ -138,6 +147,7 @@ impl Sim {
             ekf,
             last_t: vec![f64::NEG_INFINITY; n],
             t: 0.0,
+            steps: 0,
             collisions: 0,
             touching: false,
             distance_m: 0.0,
@@ -145,7 +155,14 @@ impl Sim {
             error_samples: 0,
             max_error_m: 0.0,
             compute: Duration::ZERO,
+            scan_matches: 0,
+            scan_attempts: 0,
         })
+    }
+
+    /// Is the pose corrected by scan matching? See [`SimConfig::scan_match`].
+    pub fn scan_matching(&self) -> bool {
+        self.cfg.scan_match && self.cfg.mode == PoseMode::Ekf { gps: false }
     }
 
     /// What the drone believes about its state: estimate, or truth in perfect mode.
@@ -174,25 +191,39 @@ impl Sim {
         let dt = self.cfg.dt;
         let before = self.truth.position;
         self.truth.step(cmd, &self.spec.airframe, &self.world, dt);
-        self.t += dt;
+        self.steps += 1;
+        let now = self.steps as f64 * dt as f64;
+        self.t = now as f32;
         self.distance_m += before.distance(self.truth.position);
         let hit = self.world.collides(self.truth.position, self.spec.airframe.radius);
         self.collisions += (hit && !self.touching) as u32;
         self.touching = hit;
 
         let body = Pose::from(&self.truth);
-        self.suite.update(&self.world, &body, self.t as f64);
+        self.suite.update(&self.world, &body, now);
 
         let start = Instant::now();
         // Navigation first (the current pose), then the map seen from that pose.
         let fresh: Vec<usize> = (0..self.suite.latest.len())
             .filter(|&k| self.suite.latest[k].as_ref().is_some_and(|m| m.t > self.last_t[k]))
             .collect();
+        let scan_matching = self.scan_matching();
         if let Some(ekf) = &mut self.ekf {
             for &k in &fresh {
                 let m = self.suite.latest[k].as_ref().unwrap();
                 if self.spec.sensors[k].kind.is_navigation() {
                     ekf.feed(m);
+                }
+            }
+            // Then the range scans, aligned on the map built so far (before they
+            // are added to it).
+            if scan_matching {
+                for &k in &fresh {
+                    let m = self.suite.latest[k].as_ref().unwrap();
+                    if let Some(accepted) = scan_correct(ekf, &self.grid, m, &body, &MatchConfig::default()) {
+                        self.scan_attempts += 1;
+                        self.scan_matches += accepted as u32;
+                    }
                 }
             }
         }
@@ -219,6 +250,30 @@ impl Sim {
         self.error_samples += 1;
         self.max_error_m = self.max_error_m.max(e);
     }
+}
+
+/// Corrects the EKF by aligning the range scan `m` (taken from the real pose
+/// `truth`, which only serves to re-express it) on the map. `None` if `m` is not a
+/// usable scan or does not overlap the map enough; otherwise whether the EKF
+/// accepted the correction.
+pub fn scan_correct(ekf: &mut Ekf, grid: &OccupancyGrid, m: &sensors::Measurement, truth: &Pose, cfg: &MatchConfig) -> Option<bool> {
+    let belief = ekf.state();
+    let believed = Pose::from(&belief);
+    let seen = m.reposed(truth, &believed);
+    let center = glam::Vec2::new(belief.position.x, belief.position.z);
+    // Search as wide as the pose uncertainty (3σ), to lock on again after a
+    // stretch with nothing to match.
+    let cfg = MatchConfig {
+        search_m: (3.0 * ekf.horizontal_std()).clamp(cfg.reach_m, 3.0),
+        max_offset_m: cfg.max_offset_m.max((3.0 * ekf.horizontal_std()).min(3.0)),
+        max_yaw: cfg.max_yaw.max((3.0 * ekf.yaw_std()).min(0.5)),
+        ..*cfg
+    };
+    let found = grid.match_scan(&seen, center, &cfg)?;
+    let c = found.covariance;
+    let covariance = [[c.x_axis.x, c.y_axis.x, c.z_axis.x], [c.x_axis.y, c.y_axis.y, c.z_axis.y], [c.x_axis.z, c.y_axis.z, c.z_axis.z]];
+    let target = center + found.offset;
+    Some(ekf.update_pose(target.x, target.y, belief.yaw + found.yaw, covariance))
 }
 
 /// Map cells whose column is entirely empty within the slab (ground
@@ -291,5 +346,38 @@ mod tests {
         println!("EKF + GPS: RMS error {:.2} m, max {:.2} m", sim.pose_rms(), sim.max_error_m);
         assert!(sim.pose_rms() < 0.6 && sim.max_error_m < 1.5);
         assert_eq!(sim.collisions, 0);
+    }
+
+    /// Without GPS: scan matching holds the pose where the map constrains it, and
+    /// does no harm where it does not.
+    #[test]
+    fn scan_matching_bounds_the_drift_without_gps() {
+        let fly = |scan_match: bool, cmd: Command| {
+            let cfg = SimConfig { mode: PoseMode::Ekf { gps: false }, scan_match, ..Default::default() };
+            let mut sim = Sim::new(corridor(), &DroneSpec::scout(), cfg).unwrap();
+            for _ in 0..1000 {
+                sim.step(cmd);
+            }
+            println!(
+                "scan matching {scan_match}: RMS error {:.2} m, max {:.2} m, matches {}/{}",
+                sim.pose_rms(),
+                sim.max_error_m,
+                sim.scan_matches,
+                sim.scan_attempts
+            );
+            sim
+        };
+        // Hovering in sight of walls and corners: the pose is held.
+        let without = fly(false, Command::default());
+        let with = fly(true, Command::default());
+        assert!(with.scan_matches > 90, "{} matches", with.scan_matches);
+        assert!(with.pose_rms() < 0.1 && with.pose_rms() < without.pose_rms() / 3.0);
+        // Straight down the corridor: its walls say nothing about the position
+        // along it, so the drift there is the IMU's; matching must not make it worse.
+        let cmd = Command { forward: 0.3, ..Default::default() };
+        let without = fly(false, cmd);
+        let with = fly(true, cmd);
+        assert!(with.pose_rms() < without.pose_rms() * 1.2);
+        assert_eq!(with.collisions, 0);
     }
 }

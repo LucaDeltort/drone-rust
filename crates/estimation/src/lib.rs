@@ -7,10 +7,11 @@
 //!
 //! - Prediction on each IMU measurement: integrate the debiased acceleration, rotated
 //!   into the world frame by the estimated yaw.
-//! - Correction by the barometer (height) and the GPS (position).
+//! - Correction by the barometer (height), the GPS (position) and scan matching
+//!   (planar pose, see [`Ekf::update_pose`]).
 //!
-//! Without GPS, nothing observes the horizontal position or the yaw: the estimate drifts
-//! with the IMU biases, and the filter's uncertainty says so.
+//! Without GPS or scan matching, nothing observes the horizontal position or the yaw:
+//! the estimate drifts with the IMU biases, and the filter's uncertainty says so.
 //!
 //! Pure Rust, no Bevy and no access to the ground truth (except the known start pose).
 
@@ -230,6 +231,28 @@ impl Ekf {
         let r = SMatrix::<f32, 3, 3>::identity() * self.cfg.gps_std.powi(2);
         let z = SVector::<f32, 3>::from_fn(|k, _| position[k] - self.x[P + k]);
         self.correct(h, r, z);
+    }
+
+    /// Correction by a planar pose (x, z, yaw) with its covariance, e.g. from scan
+    /// matching. Rejected (returns `false`) if it is inconsistent with the current
+    /// estimate (Mahalanobis gate).
+    pub fn update_pose(&mut self, x: f32, z: f32, yaw: f32, covariance: [[f32; 3]; 3]) -> bool {
+        let mut h = SMatrix::<f32, 3, N>::zeros();
+        h[(0, P)] = 1.0;
+        h[(1, P + 2)] = 1.0;
+        h[(2, YAW)] = 1.0;
+        // Floor: the match is never better than this, whatever its Hessian says.
+        let floor = [0.02f32.powi(2), 0.02f32.powi(2), 0.3f32.to_radians().powi(2)];
+        let r = SMatrix::<f32, 3, 3>::from_fn(|i, j| covariance[i][j] + if i == j { floor[i] } else { 0.0 });
+        let z = SVector::<f32, 3>::new(x - self.x[P], z - self.x[P + 2], wrap(yaw - self.x[YAW]));
+        let s = h * self.p * h.transpose() + r;
+        let Some(s_inv) = s.try_inverse() else { return false };
+        // 99.9 % of a χ² with 3 degrees of freedom.
+        if (z.transpose() * s_inv * z)[(0, 0)] > 16.3 {
+            return false;
+        }
+        self.correct(h, r, z);
+        true
     }
 
     fn correct<const M: usize>(

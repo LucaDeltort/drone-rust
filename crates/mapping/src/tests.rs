@@ -202,3 +202,64 @@ fn contradictory_evidence_makes_a_cell_ambiguous() {
     let (a, b) = g.index(-5.0, -5.0).unwrap();
     assert!(!g.ambiguous(a, b));
 }
+
+/// Scan of the Scout's lidar from `pose` in the corridor, and the corridor itself.
+fn corridor_scan(pose: &Pose) -> (World, Measurement) {
+    let world = World::build(&WorldSpec::from_ron(include_str!("../../../maps/corridor.ron")).unwrap()).unwrap();
+    let spec = DroneSpec::scout();
+    let mut suite = SensorSuite::new(&spec.sensors, 3);
+    suite.update(&world, pose, 0.0);
+    let scan = suite.latest.iter().flatten().find(|m| matches!(m.data, Data::Scan { .. })).unwrap().clone();
+    (world, scan)
+}
+
+#[test]
+fn scan_matching_recovers_a_pose_offset() {
+    // Positions with walls in several directions: start of the corridor, middle.
+    for (x, z, yaw0) in [(1.0, -6.0, 0.4), (-3.0, -25.0, 1.2)] {
+        let truth = Pose::new(Vec3::new(x, 2.0, z), Quat::from_rotation_y(yaw0));
+        let (_, scan) = corridor_scan(&truth);
+        let mut g = OccupancyGrid::new(80.0, 0.25, 1.5, 2.5);
+        for _ in 0..3 {
+            g.integrate(&scan);
+        }
+        for (dx, dz, dyaw) in [(0.0, 0.0, 0.0), (0.0, 0.0, 2f32), (0.0, 0.0, -2.0), (0.15, 0.0, 0.0), (0.0, -0.15, 0.0), (0.1, 0.1, 1.0)] {
+            let dyaw = dyaw.to_radians();
+            let est = Pose::new(truth.position + Vec3::new(dx, 0.0, dz), Quat::from_rotation_y(yaw0 + dyaw));
+            let seen = scan.reposed(&truth, &est);
+            let center = Vec2::new(est.position.x, est.position.z);
+            let found = g.match_scan(&seen, center, &MatchConfig::default()).expect("match");
+            // The correction brings the estimate back onto the truth, within its
+            // announced uncertainty.
+            let e = Vec3::new(found.offset.x + dx, found.offset.y + dz, found.yaw + dyaw);
+            assert!(e.truncate().length() < 0.03 && e.z.abs() < 0.2f32.to_radians(), "({x}, {z}) {e:?}");
+            assert!(e.dot(found.covariance.inverse() * e) < 16.0, "({x}, {z}) {e:?} {found:?}");
+        }
+    }
+}
+
+#[test]
+fn scan_matching_has_no_bias_along_a_straight_flight() {
+    // Map built from the true poses down the corridor, whose walls say nothing
+    // about the position along it: the next scan must not slide along them.
+    let world = World::build(&WorldSpec::from_ron(include_str!("../../../maps/corridor.ron")).unwrap()).unwrap();
+    let spec = DroneSpec::scout();
+    let mut suite = SensorSuite::new(&spec.sensors, 3);
+    let mut g = OccupancyGrid::new(80.0, 0.25, 1.5, 2.5);
+    let mut along = Vec::new();
+    for k in 0..40 {
+        let t = k as f64 * 0.1;
+        let z = -0.32 * k as f32;
+        let pose = Pose::new(Vec3::new(0.0, 2.0, z), Quat::IDENTITY);
+        suite.update(&world, &pose, t);
+        let scan = suite.latest.iter().flatten().find(|m| matches!(m.data, Data::Scan { .. }) && m.t == t).unwrap().clone();
+        if k > 0 {
+            let found = g.match_scan(&scan, Vec2::new(0.0, z), &MatchConfig::default()).expect("match");
+            assert!(found.offset.length() < 0.12 && found.yaw.abs() < 0.2f32.to_radians(), "z = {z}: {found:?}");
+            along.push(found.offset.y);
+        }
+        g.integrate(&scan);
+    }
+    let mean = along.iter().sum::<f32>() / along.len() as f32;
+    assert!(mean.abs() < 0.02, "mean offset along the corridor: {mean}");
+}

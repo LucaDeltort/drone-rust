@@ -9,6 +9,7 @@
 //!   cargo run --release -p bench -- --drones scout,pro --maps corridor \
 //!       --missions explore-nearest,a-b --poses truth,ekf-gps --seeds 1,2 \
 //!       --out bench/results.csv
+//!   --scan-match off: `ekf` mode without scan matching (the IMU drift alone).
 //!
 //! Each simulation is independent and deterministic (fixed seed, fixed step); they
 //! run in parallel on all cores, and the CSV keeps the matrix order.
@@ -78,6 +79,7 @@ struct Args {
     a_b_limit_s: f32,
     out: String,
     threads: usize,
+    scan_match: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -93,6 +95,7 @@ fn parse_args() -> Result<Args, String> {
         a_b_limit_s: 120.0,
         out: "bench/results.csv".into(),
         threads: std::thread::available_parallelism().map_or(4, |n| n.get()),
+        scan_match: true,
     };
     let list = |v: &str| v.split(',').map(str::to_string).collect::<Vec<_>>();
     let mut it = std::env::args().skip(1);
@@ -112,6 +115,13 @@ fn parse_args() -> Result<Args, String> {
             "--a-b-limit" => a.a_b_limit_s = v.parse().map_err(|_| "--a-b-limit: number expected")?,
             "--out" => a.out = v,
             "--threads" => a.threads = v.parse().map_err(|_| "--threads: integer expected")?,
+            "--scan-match" => {
+                a.scan_match = match v.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("--scan-match: on or off expected".into()),
+                }
+            }
             _ => return Err(format!("unknown option: {flag}")),
         }
     }
@@ -189,7 +199,7 @@ const COVERAGE_AT: [f32; 2] = [60.0, 180.0];
 fn run(case: &Case, args: &Args) -> Result<Row, String> {
     let spec = load_drone(&case.drone)?;
     let world = load_map(&case.map)?;
-    let cfg = SimConfig { mode: case.pose, seed: case.seed, ..Default::default() };
+    let cfg = SimConfig { mode: case.pose, seed: case.seed, scan_match: args.scan_match, ..Default::default() };
     let mut sim = Sim::new(world, &spec, cfg)?;
     let empty = empty_cells(&sim.world, &sim.grid);
     let altitude = sim.altitude();

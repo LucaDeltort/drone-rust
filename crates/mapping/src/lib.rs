@@ -13,6 +13,9 @@
 use glam::{Quat, Vec2, Vec3};
 use sensors::{Data, Measurement};
 
+mod matching;
+pub use matching::{MatchConfig, ScanMatch};
+
 /// Readable state of a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
@@ -77,6 +80,9 @@ pub struct OccupancyGrid {
     logodds: Vec<f32>,
     /// Number of hits and free passes received by each cell.
     evidence: Vec<[u16; 2]>,
+    /// Mean position (x, z) of the hits in each cell: where the surface really is,
+    /// finer than the cell, for scan matching.
+    hit_mean: Vec<Vec2>,
     /// Rectangle (i0, j0, i1, j1) of the cells observed so far: beyond it, everything is
     /// unknown, and computations on the map can stick to this rectangle.
     bounds: Option<[usize; 4]>,
@@ -99,6 +105,7 @@ impl OccupancyGrid {
             params: LogOdds::default(),
             logodds: vec![0.0; n * n],
             evidence: vec![[0; 2]; n * n],
+            hit_mean: vec![Vec2::ZERO; n * n],
             bounds: None,
             miss_as_free: true,
         }
@@ -115,6 +122,7 @@ impl OccupancyGrid {
     pub fn clear(&mut self) {
         self.logodds.fill(0.0);
         self.evidence.fill([0; 2]);
+        self.hit_mean.fill(Vec2::ZERO);
         self.bounds = None;
     }
 
@@ -157,6 +165,13 @@ impl OccupancyGrid {
     pub fn ambiguous(&self, i: usize, j: usize) -> bool {
         let [hits, misses] = self.evidence[j * self.nx + i];
         hits >= AMBIGUOUS_MIN && misses >= AMBIGUOUS_MIN && self.cell(i, j) == Cell::Unknown
+    }
+
+    /// Where the obstacle of cell (i, j) is, within the cell: the mean of its
+    /// hits, or its center if it has none.
+    pub fn surface(&self, i: usize, j: usize) -> Vec2 {
+        let k = j * self.nx + i;
+        if self.evidence[k][0] > 0 { self.hit_mean[k] } else { self.center(i, j) }
     }
 
     pub fn cell(&self, i: usize, j: usize) -> Cell {
@@ -229,8 +244,8 @@ impl OccupancyGrid {
         // the ray so that a hit measured slightly short still lands in the matter;
         // no more, otherwise the wall moves back by a cell and the cell containing it is
         // marked free.
-        let hit_cell = range.and_then(|r| {
-            let p = origin + dir * r;
+        let hit_point = range.map(|r| origin + dir * r);
+        let hit_cell = hit_point.and_then(|p| {
             let inside = p + dir * HIT_GUARD_M;
             if (self.y_lo..=self.y_hi).contains(&p.y) { self.index(inside.x, inside.z) } else { None }
         });
@@ -273,8 +288,14 @@ impl OccupancyGrid {
                 t += step;
             }
         }
-        if let Some((i, j)) = hit_cell {
+        if let (Some((i, j)), Some(p)) = (hit_cell, hit_point) {
             self.add(i, j, self.params.hit * weight);
+            // Mean of the hits: an established surface barely moves, so the map
+            // does not follow a drifting pose.
+            let k = j * self.nx + i;
+            let n = self.evidence[k][0] as f32;
+            let mean = self.hit_mean[k];
+            self.hit_mean[k] = mean + (Vec2::new(p.x, p.z) - mean) / n.max(1.0);
             touched += 1;
         }
         touched

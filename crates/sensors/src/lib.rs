@@ -251,10 +251,12 @@ impl SensorSuite {
     pub fn update(&mut self, world: &World, body: &Pose, t: f64) -> usize {
         let mut fresh = 0;
         for (i, sensor) in self.sensors.iter_mut().enumerate() {
-            if t + 1e-9 < self.next_t[i] {
+            let period = 1.0 / sensor.rate_hz() as f64;
+            // Tolerance of 1 % of the period: a clock that is a hair early (float
+            // rounding) must not skip a whole step.
+            if t + period * 0.01 < self.next_t[i] {
                 continue;
             }
-            let period = 1.0 / sensor.rate_hz() as f64;
             // Rate kept without drift; if we fell behind, restart from t.
             self.next_t[i] = (self.next_t[i] + period).max(t + period * 0.5);
             let (origin, rotation) = sensor_pose(body, sensor.mount());

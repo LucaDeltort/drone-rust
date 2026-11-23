@@ -1,8 +1,9 @@
 //! Drone pose as seen by the AI: ground truth, or Kalman filter estimate
 //! (with or without GPS). The map and the missions only use [`Estimator::belief`].
 //!
-//! In estimated mode, a magenta ghost shows where the drone believes it is, surrounded by a
-//! 2σ circle (uncertainty announced by the filter).
+//! In estimated mode, each range scan is also matched on the map to correct the pose
+//! (scan matching, see [`sim::scan_correct`]). A magenta ghost shows where the drone
+//! believes it is, surrounded by a 2σ circle (uncertainty announced by the filter).
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
@@ -27,6 +28,11 @@ pub struct Estimator {
     pub belief: DroneState,
     /// Real horizontal error of the belief, in m (display only).
     pub error_m: f32,
+    /// Match each range scan on the map to correct the pose.
+    pub scan_match: bool,
+    /// Scan matches accepted by the EKF, and attempted, since the last reset.
+    pub scan_matches: u32,
+    pub scan_attempts: u32,
     /// Navigation sensor, by index in the suite.
     nav: Vec<bool>,
     last_t: Vec<f64>,
@@ -49,6 +55,9 @@ impl Estimator {
                 yaw_rate: 0.0,
             },
             error_m: 0.0,
+            scan_match: true,
+            scan_matches: 0,
+            scan_attempts: 0,
             nav: Vec::new(),
             last_t: Vec::new(),
             pending: Some(mode),
@@ -101,6 +110,8 @@ pub fn estimate(
             PoseMode::Truth => None,
             PoseMode::Ekf { .. } => EkfConfig::from_spec(&config.0).map(|cfg| Ekf::new(cfg, &d.state, t)),
         };
+        est.scan_matches = 0;
+        est.scan_attempts = 0;
     }
 
     if let Some(ekf) = &mut est.ekf {
@@ -112,6 +123,25 @@ pub fn estimate(
                 ekf.feed(m);
                 est.last_t[k] = m.t;
             }
+        }
+        // Then the new range scans, aligned on the map before they are added to it.
+        if est.scan_match && est.mode == (PoseMode::Ekf { gps: false }) {
+            let truth = sensors::Pose::from(&d.state);
+            let (mut matches, mut attempts) = (0, 0);
+            for (k, m) in suite.0.latest.iter().enumerate() {
+                if let Some(m) = m
+                    && !est.nav.get(k).copied().unwrap_or(true)
+                    && m.t > est.last_t[k]
+                {
+                    est.last_t[k] = m.t;
+                    if let Some(accepted) = sim::scan_correct(ekf, &map.grid, m, &truth, &mapping::MatchConfig::default()) {
+                        attempts += 1;
+                        matches += accepted as u32;
+                    }
+                }
+            }
+            est.scan_matches += matches;
+            est.scan_attempts += attempts;
         }
     }
     est.belief = est.ekf.as_ref().map_or(d.state, Ekf::state);
@@ -152,6 +182,7 @@ fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<Dro
                 est.pending = Some(mode);
             }
             ui.label("Changing mode clears the map and stops the mission.");
+            let mut scan_match = est.scan_match;
             match &est.ekf {
                 None if est.mode != PoseMode::Truth => {
                     ui.colored_label(
@@ -168,6 +199,12 @@ fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<Dro
                         est.error_m,
                         ekf.horizontal_std()
                     ));
+                    if est.mode == (PoseMode::Ekf { gps: false }) {
+                        ui.checkbox(&mut scan_match, "Scan matching (lidar / depth on the map)");
+                    }
+                    if scan_match && est.mode == (PoseMode::Ekf { gps: false }) {
+                        ui.label(format!("Scan matches accepted: {} / {}", est.scan_matches, est.scan_attempts));
+                    }
                     let (ba, bg) = ekf.biases();
                     ui.label(format!(
                         "Yaw ±{:.1}°   estimated biases: accel {:.3} m/s², gyro {:.2} °/s",
@@ -177,6 +214,7 @@ fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<Dro
                     ));
                 }
             }
+            est.scan_match = scan_match;
         });
     Ok(())
 }
