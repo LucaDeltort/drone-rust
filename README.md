@@ -13,6 +13,8 @@ An autonomous drone simulator in Rust. It provides:
 The viewer uses Bevy 0.20 and egui. The core (world, sensors, mapping, planning,
 estimation, simulation) does not depend on Bevy, so it also runs from the command line.
 
+![The drone autonomously exploring a city in the viewer: lidar rays, occupancy map filling in](docs/demo.gif)
+
 ## Quick start
 
 Requires Rust 1.98+ (edition 2024).
