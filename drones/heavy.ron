@@ -1,0 +1,40 @@
+// Heavy preset: heavier, rich perception. Depth camera + downward sonar.
+// IMU and barometer for the noisy pose; no GPS. (3D lidar will come later.)
+// Run: cargo run -p viewer -- --drone drones/heavy.ron
+DroneSpec(
+    name: "Heavy",
+    airframe: (
+        mass_kg: 2.5,
+        max_speed: 5.0,     // m/s
+        max_accel: 3.0,     // m/s²
+        max_yaw_rate: 60.0, // °/s
+        radius: 0.4,        // m
+    ),
+    camera: (
+        fov_deg: 90.0,
+        pitch_deg: -10.0,
+    ),
+    sensors: [
+        (
+            kind: Depth(
+                width: 64, height: 36, fov_deg: 87.0, range: 10.0,
+                noise_std: 0.01, noise_growth: 0.002, dropout: 0.02,
+            ),
+            mount: (pos: (0.0, 0.0, -0.4), pitch_deg: -10.0),
+            rate_hz: 10.0,
+        ),
+        (
+            kind: Sonar(cone_deg: 30.0, range: 5.0, noise_std: 0.03),
+            mount: (pitch_deg: -90.0),
+            rate_hz: 20.0,
+        ),
+        (
+            kind: Imu(accel_std: 0.05, accel_bias: 0.05, gyro_std_deg: 0.2, gyro_bias_deg: 0.5),
+            rate_hz: 100.0,
+        ),
+        (
+            kind: Baro(noise_std: 0.1, drift: 0.02),
+            rate_hz: 25.0,
+        ),
+    ],
+)

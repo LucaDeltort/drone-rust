@@ -1,0 +1,19 @@
+// Downtown: tight orthogonal grid, tall buildings, a few towers and squares.
+// Run: cargo run -p viewer -- --map maps/downtown.ron
+WorldSpec(
+    size_m: 200.0,
+    cell_m: 2.0,
+    terrain: Flat(height: 0.0),
+    obstacles: City((
+        seed: 11,
+        block_m: 24.0,     // city block
+        street_m: 8.0,     // streets
+        lots: 3,           // 3 × 3 buildings per block
+        alley_m: 1.5,      // passages between buildings (too narrow to fly)
+        height_m: (10.0, 35.0),
+        density: 0.9,
+        park_prob: 0.08,
+        tower_prob: 0.12,
+        clear_radius_m: 10.0,
+    )),
+)

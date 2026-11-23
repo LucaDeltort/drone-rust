@@ -1,0 +1,81 @@
+//! Tracking building blocks shared by missions: safe speed, altitude, command.
+
+use drone_spec::Airframe;
+use glam::{Vec2, Vec3};
+use mapping::OccupancyGrid;
+use world::drone::{Command, DroneState};
+
+use crate::grid;
+
+/// Safe-speed margin in front of an occupied cell, in m.
+const OCCUPIED_MARGIN_M: f32 = 0.15;
+/// Margin in front of an unknown cell, in m.
+const UNKNOWN_MARGIN_M: f32 = 0.05;
+
+/// Vertical command holding the altitude (proportional controller).
+pub fn hold_altitude(altitude: f32, state: &DroneState, airframe: &Airframe) -> f32 {
+    ((altitude - state.position.y) * 2.0 / airframe.max_speed).clamp(-1.0, 1.0)
+}
+
+/// Safe speed: the component pointing towards each nearby obstacle (or the unknown,
+/// which may hide one) stays low enough to stop before touching it,
+/// v·n ≤ √(2·a·(distance − radius)). Following a wall stays possible at full speed.
+pub fn safe_velocity(grid: &OccupancyGrid, state: &DroneState, airframe: &Airframe, wanted: Vec2) -> Vec2 {
+    let a = airframe.max_accel;
+    let pos = Vec2::new(state.position.x, state.position.z);
+    let horizon = airframe.max_speed.powi(2) / (2.0 * a) + airframe.radius + 0.5;
+    // Unknown inside the body itself is ignored (the drone is there).
+    let obstacles = grid::obstacles_near(grid, pos, horizon, airframe.radius - UNKNOWN_MARGIN_M);
+    // Margins: 70 % of the max deceleration (command delay, direction of the
+    // obstacle turning); 0.15 m in front of a known obstacle (distance measured in
+    // cells), 0.05 m in front of the unknown (maybe nothing): the drone can skirt
+    // closely what it has not seen, without ever entering it.
+    let limit = |o: &grid::Near| {
+        let margin = if o.occupied { OCCUPIED_MARGIN_M } else { UNKNOWN_MARGIN_M };
+        (2.0 * 0.7 * a * (o.distance - airframe.radius - margin).max(0.0)).sqrt()
+    };
+    let v_now = Vec2::new(state.velocity.x, state.velocity.z);
+    let mut v2 = wanted;
+    if obstacles.iter().any(|o| v_now.dot(o.dir) > limit(o)) {
+        // Already too fast towards an obstacle (momentum from before a heading change):
+        // braking takes priority. Start from the current velocity so that all
+        // available acceleration goes into braking.
+        v2 = v_now;
+    }
+    // Successive projections onto each constraint v·n ≤ limit(d).
+    for _ in 0..3 {
+        for o in &obstacles {
+            let excess = v2.dot(o.dir) - limit(o);
+            if excess > 0.0 {
+                v2 -= o.dir * excess;
+            }
+        }
+    }
+    v2
+}
+
+/// Heading (yaw) facing the direction `dir` (x, z).
+pub fn yaw_towards(dir: Vec2) -> f32 {
+    (-dir.x).atan2(-dir.y)
+}
+
+/// Normalized command for a desired horizontal velocity, a yaw error and
+/// a vertical command.
+pub fn command(state: &DroneState, airframe: &Airframe, v2: Vec2, yaw_err: f32, up: f32) -> Command {
+    let v = Vec3::new(v2.x, 0.0, v2.y);
+    let fwd = state.forward();
+    let right = Vec3::new(-fwd.z, 0.0, fwd.x);
+    Command {
+        forward: v.dot(fwd) / airframe.max_speed,
+        right: v.dot(right) / airframe.max_speed,
+        up,
+        yaw: (yaw_err * 3.0 / airframe.max_yaw_rate.to_radians()).clamp(-1.0, 1.0),
+    }
+}
+
+/// Angle wrapped into ]-π, π].
+pub fn wrap(a: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let a = a.rem_euclid(TAU);
+    if a > PI { a - TAU } else { a }
+}

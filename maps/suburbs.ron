@@ -1,0 +1,20 @@
+// Suburbs: large blocks, low scattered houses, gardens and wooded parks.
+// The grid is rotated by 15° from the axes.
+// Run: cargo run -p viewer -- --map maps/suburbs.ron
+WorldSpec(
+    size_m: 200.0,
+    cell_m: 2.0,
+    terrain: Flat(height: 0.0),
+    obstacles: City((
+        seed: 23,
+        block_m: 30.0,
+        street_m: 10.0,
+        lots: 2,
+        alley_m: 6.0,      // gardens between the houses: flyable
+        height_m: (4.0, 8.0),
+        density: 0.65,
+        park_prob: 0.2,
+        rotation_deg: 15.0,
+        clear_radius_m: 12.0,
+    )),
+)

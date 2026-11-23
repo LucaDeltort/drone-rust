@@ -1,0 +1,182 @@
+//! Drone pose as seen by the AI: ground truth, or Kalman filter estimate
+//! (with or without GPS). The map and the missions only use [`Estimator::belief`].
+//!
+//! In estimated mode, a magenta ghost shows where the drone believes it is, surrounded by a
+//! 2σ circle (uncertainty announced by the filter).
+
+use bevy::prelude::*;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use estimation::{Ekf, EkfConfig};
+use sim::{PoseMode, sensors_for};
+use world::drone::DroneState;
+
+use crate::{
+    WorldRebuilt,
+    drone::{DroneConfig, SimDrone},
+    explore::Exploration,
+    mapview::Map,
+    mission::Mission,
+    sensing::{SENSOR_SEED, Suite, sense},
+};
+
+#[derive(Resource)]
+pub struct Estimator {
+    pub mode: PoseMode,
+    pub ekf: Option<Ekf>,
+    /// What the drone believes about its state.
+    pub belief: DroneState,
+    /// Real horizontal error of the belief, in m (display only).
+    pub error_m: f32,
+    /// Navigation sensor, by index in the suite.
+    nav: Vec<bool>,
+    last_t: Vec<f64>,
+    /// Mode requested by the UI, applied at the next step.
+    pending: Option<PoseMode>,
+    /// The drone has just been reset: restart from a certain estimate.
+    reset: bool,
+}
+
+impl Estimator {
+    pub fn new(mode: PoseMode) -> Self {
+        Self {
+            mode,
+            ekf: None,
+            belief: DroneState {
+                position: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                yaw: 0.0,
+                acceleration: Vec3::ZERO,
+                yaw_rate: 0.0,
+            },
+            error_m: 0.0,
+            nav: Vec::new(),
+            last_t: Vec::new(),
+            pending: Some(mode),
+            reset: true,
+        }
+    }
+}
+
+pub struct PosePlugin(pub PoseMode);
+
+impl Plugin for PosePlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(Estimator::new(self.0))
+            .add_systems(FixedUpdate, estimate.after(sense))
+            .add_systems(Update, (reset_on_rebuild, draw))
+            .add_systems(EguiPrimaryContextPass, panel);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn estimate(
+    time: Res<Time>,
+    mut est: ResMut<Estimator>,
+    config: Res<DroneConfig>,
+    mut drones: Query<(&SimDrone, &mut Suite)>,
+    mut map: ResMut<Map>,
+    mut ex: ResMut<Exploration>,
+    mut mission: ResMut<Mission>,
+) {
+    let Ok((d, mut suite)) = drones.single_mut() else { return };
+    let t = time.elapsed_secs_f64();
+    let est = est.as_mut();
+
+    if let Some(mode) = est.pending.take() {
+        // New mode: the mode's sensors, map and missions start from scratch (the
+        // map was built with the old pose).
+        let sensors = sensors_for(&config.0, mode);
+        est.nav = sensors.iter().map(|s| s.kind.is_navigation()).collect();
+        suite.0 = sensors::SensorSuite::new(&sensors, SENSOR_SEED);
+        est.last_t = vec![f64::NEG_INFINITY; sensors.len()];
+        est.mode = mode;
+        est.reset = true;
+        map.reset();
+        ex.explorer = None;
+        mission.navigator = None;
+    }
+    if est.reset {
+        est.reset = false;
+        est.ekf = match est.mode {
+            PoseMode::Truth => None,
+            PoseMode::Ekf { .. } => EkfConfig::from_spec(&config.0).map(|cfg| Ekf::new(cfg, &d.state, t)),
+        };
+    }
+
+    if let Some(ekf) = &mut est.ekf {
+        for (k, m) in suite.0.latest.iter().enumerate() {
+            if let Some(m) = m
+                && est.nav.get(k).copied().unwrap_or(false)
+                && m.t > est.last_t[k]
+            {
+                ekf.feed(m);
+                est.last_t[k] = m.t;
+            }
+        }
+    }
+    est.belief = est.ekf.as_ref().map_or(d.state, Ekf::state);
+    let e = est.belief.position - d.state.position;
+    est.error_m = (e.x * e.x + e.z * e.z).sqrt();
+}
+
+fn reset_on_rebuild(mut rebuilt: MessageReader<WorldRebuilt>, mut est: ResMut<Estimator>) {
+    if rebuilt.read().count() > 0 {
+        est.reset = true;
+    }
+}
+
+fn draw(est: Res<Estimator>, mut gizmos: Gizmos) {
+    let Some(ekf) = &est.ekf else { return };
+    let b = &est.belief;
+    let magenta = Color::srgb(1.0, 0.3, 0.9);
+    gizmos.sphere(Isometry3d::from_translation(b.position), 0.3, magenta);
+    gizmos.line(b.position, b.position + b.forward() * 0.8, magenta);
+    let flat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let radius = (2.0 * ekf.horizontal_std()).max(0.05);
+    gizmos.circle(Isometry3d::new(b.position, flat), radius, magenta.with_alpha(0.7));
+}
+
+fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<DroneConfig>) -> Result {
+    let ctx = contexts.ctx_mut()?;
+    egui::Window::new("Pose")
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -12.0])
+        .resizable(false)
+        .show(ctx, |ui| {
+            let mut mode = est.mode;
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut mode, PoseMode::Truth, "Truth");
+                ui.radio_value(&mut mode, PoseMode::Ekf { gps: true }, "EKF + GPS");
+                ui.radio_value(&mut mode, PoseMode::Ekf { gps: false }, "EKF without GPS");
+            });
+            if mode != est.mode && est.pending.is_none() {
+                est.pending = Some(mode);
+            }
+            ui.label("Changing mode clears the map and stops the mission.");
+            match &est.ekf {
+                None if est.mode != PoseMode::Truth => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 90, 70),
+                        format!("{} has no IMU: perfect pose used", config.0.name),
+                    );
+                }
+                None => {
+                    ui.label("Perfect pose (ground truth)");
+                }
+                Some(ekf) => {
+                    ui.label(format!(
+                        "Real error: {:.2} m   Announced uncertainty (1σ): {:.2} m",
+                        est.error_m,
+                        ekf.horizontal_std()
+                    ));
+                    let (ba, bg) = ekf.biases();
+                    ui.label(format!(
+                        "Yaw ±{:.1}°   estimated biases: accel {:.3} m/s², gyro {:.2} °/s",
+                        ekf.yaw_std().to_degrees(),
+                        ba.length(),
+                        bg.to_degrees()
+                    ));
+                }
+            }
+        });
+    Ok(())
+}

@@ -1,0 +1,12 @@
+[package]
+name = "world"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+drone_spec = { version = "0.1.0", path = "../drone_spec" }
+glam = { version = "0.33", features = ["serde"] }
+noise = "0.9"
+ron = "0.12"
+serde = { version = "1.0.229", features = ["derive"] }

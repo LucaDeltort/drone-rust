@@ -1,0 +1,31 @@
+// Cheap preset: minimal perception, cautious. Four sonars (front, back,
+// left, right), a low-end IMU and a barometer; no GPS.
+// Run: cargo run -p viewer -- --drone drones/cheap.ron
+DroneSpec(
+    name: "Cheap",
+    airframe: (
+        mass_kg: 0.5,
+        max_speed: 4.0,     // m/s
+        max_accel: 4.0,     // m/s²
+        max_yaw_rate: 90.0, // °/s
+        radius: 0.2,        // m
+    ),
+    camera: (
+        fov_deg: 90.0,
+        pitch_deg: -10.0,
+    ),
+    sensors: [
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.0, 0.0, -0.1)), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.0, 0.0, 0.1), yaw_deg: 180.0), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (-0.1, 0.0, 0.0), yaw_deg: 90.0), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.1, 0.0, 0.0), yaw_deg: -90.0), rate_hz: 20.0),
+        (
+            kind: Imu(accel_std: 0.2, accel_bias: 0.2, gyro_std_deg: 1.0, gyro_bias_deg: 2.0),
+            rate_hz: 100.0,
+        ),
+        (
+            kind: Baro(noise_std: 0.3, drift: 0.05),
+            rate_hz: 10.0,
+        ),
+    ],
+)

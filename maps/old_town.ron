@@ -1,0 +1,22 @@
+// Old town: small blocks, narrow streets, skewed and offset buildings,
+// on gentle terrain. Grid rotated by 35°.
+// Run: cargo run -p viewer -- --map maps/old_town.ron
+WorldSpec(
+    size_m: 200.0,
+    cell_m: 1.0,
+    terrain: Noise(seed: 5, amplitude_m: 1.5, wavelength_m: 80.0, octaves: 2),
+    obstacles: City((
+        seed: 37,
+        block_m: 18.0,
+        street_m: 5.0,
+        lots: 3,
+        alley_m: 2.5,      // alleys: just wide enough for the Scout, too narrow for the Heavy
+        height_m: (6.0, 15.0),
+        density: 0.85,
+        park_prob: 0.05,
+        rotation_deg: 35.0,
+        jitter_deg: 12.0,
+        jitter_m: 1.0,
+        clear_radius_m: 8.0,
+    )),
+)

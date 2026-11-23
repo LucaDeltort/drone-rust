@@ -1,0 +1,49 @@
+// Pro preset: comparison baseline. 2D lidar, depth camera, sonar,
+// good-quality IMU, barometer and GPS.
+// Run: cargo run -p viewer -- --drone drones/pro.ron
+DroneSpec(
+    name: "Pro",
+    airframe: (
+        mass_kg: 1.2,
+        max_speed: 8.0,      // m/s
+        max_accel: 6.0,      // m/s²
+        max_yaw_rate: 120.0, // °/s
+        radius: 0.3,         // m
+    ),
+    camera: (
+        fov_deg: 90.0,
+        pitch_deg: -10.0,
+    ),
+    sensors: [
+        (
+            kind: Lidar2D(rays: 720, range: 20.0, noise_std: 0.01, dropout: 0.005),
+            mount: (pos: (0.0, -0.35, 0.0)),
+            rate_hz: 10.0,
+        ),
+        (
+            kind: Depth(
+                width: 64, height: 36, fov_deg: 87.0, range: 10.0,
+                noise_std: 0.01, noise_growth: 0.001, dropout: 0.01,
+            ),
+            mount: (pos: (0.0, 0.0, -0.3), pitch_deg: -10.0),
+            rate_hz: 10.0,
+        ),
+        (
+            kind: Sonar(cone_deg: 25.0, range: 5.0, noise_std: 0.02),
+            mount: (pos: (0.0, 0.0, -0.1)),
+            rate_hz: 20.0,
+        ),
+        (
+            kind: Imu(accel_std: 0.01, accel_bias: 0.01, gyro_std_deg: 0.05, gyro_bias_deg: 0.05),
+            rate_hz: 100.0,
+        ),
+        (
+            kind: Baro(noise_std: 0.05, drift: 0.01),
+            rate_hz: 25.0,
+        ),
+        (
+            kind: Gps(noise_std: 0.5),
+            rate_hz: 5.0,
+        ),
+    ],
+)

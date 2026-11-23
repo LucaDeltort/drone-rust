@@ -1,0 +1,16 @@
+# Build output
+/target
+
+# Benchmark runs: only the reference results are versioned
+/bench/*.csv
+!/bench/results.csv
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local Claude Code settings
+.claude/settings.local.json

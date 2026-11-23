@@ -1,0 +1,39 @@
+// Scout preset: light and fast. 2D lidar + forward sonar.
+// IMU and barometer for the noisy pose; no GPS.
+// Run: cargo run -p viewer -- --drone drones/scout.ron
+DroneSpec(
+    name: "Scout",
+    airframe: (
+        mass_kg: 0.8,
+        max_speed: 8.0,     // m/s
+        max_accel: 6.0,     // m/s²
+        max_yaw_rate: 120.0, // °/s
+        radius: 0.25,       // m
+    ),
+    camera: (
+        fov_deg: 90.0,   // horizontal field of view
+        pitch_deg: -10.0,
+    ),
+    sensors: [
+        (
+            kind: Lidar2D(rays: 360, range: 12.0, noise_std: 0.02, dropout: 0.01),
+            // Under the drone, slightly below its sphere (radius 0.25 m): the fan sees
+            // rising ground where the drone would touch it, not a meter farther.
+            mount: (pos: (0.0, -0.3, 0.0)),
+            rate_hz: 10.0,
+        ),
+        (
+            kind: Sonar(cone_deg: 25.0, range: 4.0, noise_std: 0.03),
+            mount: (pos: (0.0, 0.0, -0.1)),
+            rate_hz: 20.0,
+        ),
+        (
+            kind: Imu(accel_std: 0.05, accel_bias: 0.05, gyro_std_deg: 0.2, gyro_bias_deg: 0.5),
+            rate_hz: 100.0,
+        ),
+        (
+            kind: Baro(noise_std: 0.1, drift: 0.02),
+            rate_hz: 25.0,
+        ),
+    ],
+)

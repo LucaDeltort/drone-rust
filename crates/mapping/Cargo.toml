@@ -1,0 +1,13 @@
+[package]
+name = "mapping"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam = "0.33"
+sensors = { version = "0.1.0", path = "../sensors" }
+
+[dev-dependencies]
+drone_spec = { path = "../drone_spec" }
+world = { path = "../world" }

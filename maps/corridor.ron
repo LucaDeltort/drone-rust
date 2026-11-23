@@ -1,0 +1,21 @@
+// Hand-drawn map: a corridor of walls on flat ground, with poles.
+// Frame: Y up, origin at the center, meters. The drone starts from the origin.
+// Run: cargo run -p viewer -- --map maps/corridor.ron
+WorldSpec(
+    size_m: 80.0,
+    cell_m: 1.0,
+    terrain: Flat(height: 0.0),
+    obstacles: List([
+        // Corridor walls, along Z.
+        (shape: Box(size: (0.5, 4.0, 30.0)), x: -4.0, z: -20.0),
+        (shape: Box(size: (0.5, 4.0, 30.0)), x: 4.0, z: -20.0),
+        // Far wall, with a gap on the right.
+        (shape: Box(size: (6.0, 4.0, 0.5)), x: -1.0, z: -35.0),
+        // Poles in the open area.
+        (shape: Cylinder(radius: 0.4, height: 6.0), x: 10.0, z: 5.0),
+        (shape: Cylinder(radius: 0.4, height: 6.0), x: 14.0, z: 9.0),
+        (shape: Cylinder(radius: 0.4, height: 6.0), x: 18.0, z: 5.0),
+        // Block rotated by 30°.
+        (shape: Box(size: (5.0, 8.0, 3.0)), x: -15.0, z: 12.0, yaw_deg: 30.0),
+    ]),
+)

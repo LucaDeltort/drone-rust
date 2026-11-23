@@ -1,0 +1,19 @@
+// Very dense district: streets only 3.5 m wide, no park. Tests flying through
+// tight spaces (the Heavy, 0.8 m wide plus its margins, barely fits).
+// Run: cargo run -p viewer -- --map maps/dense_city.ron
+WorldSpec(
+    size_m: 160.0,
+    cell_m: 2.0,
+    terrain: Flat(height: 0.0),
+    obstacles: City((
+        seed: 51,
+        block_m: 14.0,
+        street_m: 3.5,
+        lots: 2,
+        alley_m: 1.0,
+        height_m: (8.0, 20.0),
+        density: 0.95,
+        rotation_deg: 0.0,
+        clear_radius_m: 6.0,
+    )),
+)
