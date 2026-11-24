@@ -17,7 +17,7 @@ fn flat() -> World {
 }
 
 fn nav_sensors(imu: (f32, f32, f32, f32), gps: bool) -> Vec<SensorSpec> {
-    let spec = |kind, rate_hz| SensorSpec { kind, mount: Mount::default(), rate_hz };
+    let spec = |kind, rate_hz| SensorSpec { kind, mount: Mount::default(), rate_hz, latency_s: 0.0 };
     let (accel_std, accel_bias, gyro_std_deg, gyro_bias_deg) = imu;
     let mut v = vec![
         spec(SensorKind::Imu { accel_std, accel_bias, gyro_std_deg, gyro_bias_deg }, 100.0),

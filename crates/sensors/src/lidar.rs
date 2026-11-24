@@ -56,8 +56,18 @@ impl Sensor for Lidar2D {
         &mut self.noise
     }
 
-    fn measure(&mut self, world: &World, _body: &Pose, origin: Vec3, rotation: Quat) -> Data {
-        let beams = crate::cast_beams(world, origin, rotation, &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
+    fn measure(&mut self, world: &World, body: &Pose, origin: Vec3, rotation: Quat) -> Data {
+        self.measure_sweep(world, body, (origin, rotation), (origin, rotation))
+    }
+
+    fn spinning(&self) -> bool {
+        true
+    }
+
+    fn measure_sweep(&mut self, world: &World, _body: &Pose, start: (Vec3, Quat), end: (Vec3, Quat)) -> Data {
+        let n = self.dirs.len() as f32;
+        let pose = |i: usize| crate::sweep_pose(start, end, (i as f32 + 0.5) / n);
+        let beams = crate::cast_beams(world, pose, &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
         Data::Scan { beams, max_range: self.range }
     }
 }

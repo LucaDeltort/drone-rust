@@ -183,9 +183,11 @@ mod tests {
             position: Vec3::new(1.0, 2.0, 3.0),
             // Turned 90° to the left: the drone's nose is -X.
             rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            attitude: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
             velocity: Vec3::ZERO,
             acceleration: Vec3::new(-2.0, 0.0, 0.0),
             yaw_rate: 0.5,
+            angular_velocity: Vec3::Y * 0.5,
         }
     }
 

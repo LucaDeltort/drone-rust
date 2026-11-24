@@ -31,7 +31,9 @@ DroneSpec(
                 channels: 16, rays: 360, fov_up_deg: 20.0, fov_down_deg: -40.0,
                 range: 25.0, noise_std: 0.02, dropout: 0.01,
             ),
-            mount: (pos: (0.0, 0.15, 0.0)),
+            // Fixed to the airframe: it tilts with the drone and sweeps while it
+            // flies (the map undoes the sweep, not the tilt error).
+            mount: (pos: (0.0, 0.15, 0.0), stabilized: false),
             rate_hz: 5.0,
         ),
         (

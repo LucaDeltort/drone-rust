@@ -61,7 +61,7 @@ fn clear_on_rebuild(mut rebuilt: MessageReader<WorldRebuilt>, mut suites: Query<
         return;
     }
     for mut s in &mut suites {
-        s.0.latest.iter_mut().for_each(|m| *m = None);
+        s.0.reset();
     }
 }
 

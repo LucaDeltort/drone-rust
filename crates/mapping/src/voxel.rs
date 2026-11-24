@@ -241,23 +241,24 @@ impl VoxelMap {
             _ => return,
         };
         let reach = max_range.min(self.max_free_m);
-        let ray = |b: &sensors::Beam| {
-            let dir = m.rotation * b.dir;
+        let ray = |(i, b): (usize, &sensors::Beam)| {
+            let (origin, rotation) = m.beam_pose(i);
+            let dir = rotation * b.dir;
             let (end, hit) = match b.range {
-                Some(d) => (m.origin + dir * d, true),
-                None => (m.origin + dir * reach, false),
+                Some(d) => (origin + dir * d, true),
+                None => (origin + dir * reach, false),
             };
             let mut keys = Vec::new();
-            let end_key = self.ray_keys(m.origin, end, hit, &mut keys);
+            let end_key = self.ray_keys(origin, end, hit, &mut keys);
             (keys, end_key)
         };
         #[cfg(feature = "parallel")]
         let rays: Vec<_> = {
             use rayon::prelude::*;
-            beams.par_iter().with_min_len(64).filter(|b| b.valid).map(ray).collect()
+            beams.par_iter().enumerate().with_min_len(64).filter(|(_, b)| b.valid).map(ray).collect()
         };
         #[cfg(not(feature = "parallel"))]
-        let rays: Vec<_> = beams.iter().filter(|b| b.valid).map(ray).collect();
+        let rays: Vec<_> = beams.iter().enumerate().filter(|(_, b)| b.valid).map(ray).collect();
         let (miss, hit) = (self.params.miss, self.params.hit);
         for (keys, end_key) in rays {
             for k in keys {
@@ -438,6 +439,7 @@ mod tests {
             },
             mount: Mount::default(),
             rate_hz: 10.0,
+            latency_s: 0.0,
         };
         let mut suite = SensorSuite::new(&[lidar], 1);
         let mut map = VoxelMap::new(0.4);

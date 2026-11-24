@@ -106,6 +106,8 @@ fn map_with(world: &World, spec: &DroneSpec, points: &[(f32, f32, f32)]) -> Occu
     for &(x, z, yaw) in points {
         let pos = Vec3::new(x, (lo + hi) / 2.0, z);
         let body = Pose::new(pos, Quat::from_rotation_y(yaw));
+        // Teleported: no sweep spans two points.
+        suite.reset();
         // One second per point: several measurements from each sensor.
         for _ in 0..100 {
             let before: Vec<_> = suite.latest.iter().map(|m| m.as_ref().map(|m| m.t)).collect();
@@ -255,7 +257,9 @@ fn scan_matching_has_no_bias_along_a_straight_flight() {
         let scan = suite.latest.iter().flatten().find(|m| matches!(m.data, Data::Scan { .. }) && m.t == t).unwrap().clone();
         if k > 0 {
             let found = g.match_scan(&scan, Vec2::new(0.0, z), &MatchConfig::default()).expect("match");
-            assert!(found.offset.length() < 0.12 && found.yaw.abs() < 0.2f32.to_radians(), "z = {z}: {found:?}");
+            // One scan may slide a little (the corridor walls say nothing along it,
+            // and the lidar sweeps while flying); the mean below must not.
+            assert!(found.offset.length() < 0.15 && found.yaw.abs() < 0.2f32.to_radians(), "z = {z}: {found:?}");
             along.push(found.offset.y);
         }
         g.integrate(&scan);

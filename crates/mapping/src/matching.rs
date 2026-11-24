@@ -229,8 +229,12 @@ impl OccupancyGrid {
         };
         let hits: Vec<Vec2> = beams
             .iter()
-            .filter(|b| b.valid)
-            .filter_map(|b| b.range.filter(|r| *r <= cfg.max_range_share * max_range).map(|r| m.origin + m.rotation * b.dir * r))
+            .enumerate()
+            .filter(|(_, b)| b.valid)
+            .filter_map(|(i, b)| {
+                let (origin, rotation) = m.beam_pose(i);
+                b.range.filter(|r| *r <= cfg.max_range_share * max_range).map(|r| origin + rotation * b.dir * r)
+            })
             .filter(|p| (self.y_lo..=self.y_hi).contains(&p.y))
             .map(|p| Vec2::new(p.x, p.z))
             .filter(|p| self.near_occupied(*p, cfg.search_m.max(cfg.reach_m)))

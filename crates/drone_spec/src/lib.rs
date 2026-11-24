@@ -23,11 +23,15 @@ pub struct SensorSpec {
     pub mount: Mount,
     /// Measurement rate, in Hz.
     pub rate_hz: f32,
+    /// Delay between the capture and the delivery of a measurement, in s. The
+    /// measurement keeps its capture time: the consumer gets it late.
+    #[serde(default)]
+    pub latency_s: f32,
 }
 
 /// Position and orientation of the sensor in the drone frame
 /// (X right, Y up, -Z forward).
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Mount {
     #[serde(default)]
     pub pos: [f32; 3],
@@ -37,6 +41,20 @@ pub struct Mount {
     /// Rotation around X, in degrees; negative = downwards.
     #[serde(default)]
     pub pitch_deg: f32,
+    /// `true`: on a gimbal that cancels roll and pitch, the sensor only follows the
+    /// heading. `false`: fixed to the airframe, it tilts with it.
+    #[serde(default = "yes")]
+    pub stabilized: bool,
+}
+
+impl Default for Mount {
+    fn default() -> Self {
+        Self { pos: [0.0; 3], yaw_deg: 0.0, pitch_deg: 0.0, stabilized: true }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Common defects: standard deviation `noise_std` (m), plus `noise_growth` × d² for

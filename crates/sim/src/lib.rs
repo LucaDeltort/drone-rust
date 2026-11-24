@@ -48,7 +48,7 @@ pub const TAKEOFF_CLEAR_M: f32 = 1.0;
 
 /// GPS added to drones that lack one, in `Ekf { gps: true }` mode.
 pub fn default_gps() -> SensorSpec {
-    SensorSpec { kind: SensorKind::Gps { noise_std: 1.0 }, mount: Mount::default(), rate_hz: 5.0 }
+    SensorSpec { kind: SensorKind::Gps { noise_std: 1.0 }, mount: Mount::default(), rate_hz: 5.0, latency_s: 0.0 }
 }
 
 /// Effective sensors of the drone depending on the pose mode.

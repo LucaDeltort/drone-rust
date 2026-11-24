@@ -205,9 +205,13 @@ impl OccupancyGrid {
         match &m.data {
             Data::Scan { beams, max_range } | Data::DepthImage { beams, max_range, .. } => beams
                 .iter()
+                .enumerate()
                 // Invalid return (lost, too close): no information.
-                .filter(|b| b.valid)
-                .map(|b| self.integrate_ray(m.origin, m.rotation * b.dir, b.range, *max_range, 1.0))
+                .filter(|(_, b)| b.valid)
+                .map(|(i, b)| {
+                    let (origin, rotation) = m.beam_pose(i);
+                    self.integrate_ray(origin, rotation * b.dir, b.range, *max_range, 1.0)
+                })
                 .sum(),
             Data::Echo { range, cone_half_angle, max_range } => {
                 // Horizontal fan within the cone, around its axis.

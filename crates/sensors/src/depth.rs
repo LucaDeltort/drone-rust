@@ -75,7 +75,7 @@ impl Sensor for DepthCamera {
     }
 
     fn measure(&mut self, world: &World, _body: &Pose, origin: Vec3, rotation: Quat) -> Data {
-        let beams = crate::cast_beams(world, origin, rotation, &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
+        let beams = crate::cast_beams(world, |_| (origin, rotation), &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
         Data::DepthImage {
             width: self.width,
             height: self.height,

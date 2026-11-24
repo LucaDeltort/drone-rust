@@ -17,7 +17,8 @@ DroneSpec(
     sensors: [
         (
             kind: Lidar2D(rays: 720, range: 20.0, noise_std: 0.01, dropout: 0.005),
-            mount: (pos: (0.0, -0.35, 0.0)),
+            // Fixed to the airframe: tilts with the drone, sweeps while it flies.
+            mount: (pos: (0.0, -0.35, 0.0), stabilized: false),
             rate_hz: 10.0,
         ),
         (
