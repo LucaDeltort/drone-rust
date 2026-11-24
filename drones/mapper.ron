@@ -17,6 +17,9 @@ DroneSpec(
         motor_tau_s: 0.04,
         drag: 0.3,           // 1/s
         drag_quad: 0.02,     // 1/m
+        // rotor_radius_m: Some(0.12), // default: 0.4 × radius
+        // Battery (none: endless energy at full voltage). 4S 2200 mAh:
+        // battery: Some((capacity_wh: 32.0, v_full: 16.8, v_empty: 13.2, r_internal: 0.04)),
     ),
     camera: (
         fov_deg: 90.0,

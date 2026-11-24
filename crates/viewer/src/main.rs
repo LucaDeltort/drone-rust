@@ -293,7 +293,7 @@ fn hud(
     let text = format!(
         "{}\n{:5.1} m/s   alt {:5.1} m   hdg {:3.0}°\n\
          pitch {:+3.0}°  roll {:+3.0}°  thrust {:3.0} %\n\
-         wind {:4.1} m/s   FOV {:.0}°{}",
+         wind {:4.1} m/s   FOV {:.0}°{}{}",
         config.0.name,
         s.velocity.length(),
         s.altitude(&world.0),
@@ -303,6 +303,11 @@ fn hud(
         thrust,
         wind.length(),
         fov.0,
+        if config.0.airframe.battery.is_some() {
+            format!("\nbattery {:3.0} %  {:4.1} V", 100.0 * s.flight.soc, s.flight.voltage)
+        } else {
+            String::new()
+        },
         if s.flight.contact { "\nCONTACT" } else { "" },
     );
     let hud = hud_text.as_mut();

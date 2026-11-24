@@ -186,6 +186,10 @@ struct Row {
     step_mean_ms: f32,
     step_max_ms: f32,
     goal: Option<Vec2>,
+    /// Electrical energy drawn, in Wh.
+    energy_wh: f32,
+    /// Battery state of charge at the end (1 without battery).
+    soc_end: f32,
 }
 
 /// Thresholds of a successful exploration: share of the free area known, share of the
@@ -293,19 +297,21 @@ fn run(case: &Case, args: &Args) -> Result<Row, String> {
     row.pose_max_m = sim.max_error_m;
     row.step_mean_ms = step_total.as_secs_f32() * 1000.0 / steps.max(1) as f32;
     row.step_max_ms = step_max.as_secs_f32() * 1000.0;
+    row.energy_wh = sim.truth.flight.energy_wh;
+    row.soc_end = sim.truth.flight.soc;
     Ok(row)
 }
 
 const HEADER: &str = "drone,map,mission,pose,seed,success,end,time_s,distance_m,collisions,\
 coverage_60s,coverage_180s,coverage_end,map_occupied_ok,map_free_ok,\
-pose_error_rms_m,pose_error_max_m,step_mean_ms,step_max_ms,b_x,b_z";
+pose_error_rms_m,pose_error_max_m,step_mean_ms,step_max_ms,b_x,b_z,energy_wh,soc_end";
 
 fn csv_line(c: &Case, r: &Result<Row, String>) -> String {
     let opt = |v: Option<f32>| v.map_or(String::new(), |v| format!("{v:.4}"));
     let head = format!("{},{},{},{},{}", c.drone, c.map, c.mission.label(), c.pose.label(), c.seed);
     match r {
         Ok(r) => format!(
-            "{head},{},{},{:.2},{:.1},{},{},{},{},{:.4},{:.4},{:.3},{:.3},{:.3},{:.3},{},{}",
+            "{head},{},{},{:.2},{:.1},{},{},{},{},{:.4},{:.4},{:.3},{:.3},{:.3},{:.3},{},{},{:.2},{:.3}",
             r.success as u8,
             r.end,
             r.time_s,
@@ -322,9 +328,11 @@ fn csv_line(c: &Case, r: &Result<Row, String>) -> String {
             r.step_max_ms,
             opt(r.goal.map(|g| g.x)),
             opt(r.goal.map(|g| g.y)),
+            r.energy_wh,
+            r.soc_end,
         ),
         // Impossible case (for example EKF without IMU): a row saying so.
-        Err(e) => format!("{head},0,\"error: {}\",,,,,,,,,,,,,,,", e.replace('"', "'")),
+        Err(e) => format!("{head},0,\"error: {}\",,,,,,,,,,,,,,,,,", e.replace('"', "'")),
     }
 }
 

@@ -142,8 +142,9 @@ fn inspects_the_house_only_and_comes_back() {
     assert!((t.center - Vec2::new(0.0, -20.0)).length() < 1.5, "{t:?}");
     assert!((t.half - Vec2::new(6.5, 4.5)).abs().max_element() < 1.5, "{t:?}");
     assert!((t.top - 8.0).abs() < 1.0, "{t:?}");
-    // Never wandered off towards the far building.
-    assert!(o.farthest < 20.0, "{}", o.farthest);
+    // Never wandered off towards the far building (it starts 20 m away: the first
+    // steps barely move, within f32 rounding of 20).
+    assert!(o.farthest < 20.0 + 1e-3, "{}", o.farthest);
     assert!(o.end.length() < 1.0, "not home: {}", o.end);
     assert!(o.inspector.skipped < o.inspector.plan.len() / 4);
     // All four walls and the roof are mapped.

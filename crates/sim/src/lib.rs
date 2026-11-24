@@ -374,10 +374,15 @@ mod tests {
         assert!(with.pose_rms() < 0.1 && with.pose_rms() < without.pose_rms() / 3.0);
         // Straight down the corridor: its walls say nothing about the position
         // along it, so the drift there is the IMU's; matching must not make it worse.
-        let cmd = Command { forward: 0.3, ..Default::default() };
-        let without = fly(false, cmd);
-        let with = fly(true, cmd);
-        assert!(with.pose_rms() < without.pose_rms() * 1.2);
-        assert_eq!(with.collisions, 0);
+        // On average over a few speeds: one flight alone is a coin flip.
+        let (mut with_rms, mut without_rms) = (0.0, 0.0);
+        for forward in [0.28, 0.3, 0.32, 0.35] {
+            let cmd = Command { forward, ..Default::default() };
+            without_rms += fly(false, cmd).pose_rms();
+            let with = fly(true, cmd);
+            with_rms += with.pose_rms();
+            assert_eq!(with.collisions, 0);
+        }
+        assert!(with_rms < without_rms * 1.2, "{with_rms} vs {without_rms}");
     }
 }

@@ -156,6 +156,35 @@ pub struct Airframe {
     /// Quadratic (body) drag, in 1/m: deceleration per (m/s)² of airspeed.
     #[serde(default = "defaults::drag_quad")]
     pub drag_quad: f32,
+    /// Rotor (propeller) radius, in m: sets the ground effect and the power drawn.
+    /// Defaults to `0.4 * radius`.
+    #[serde(default)]
+    pub rotor_radius_m: Option<f32>,
+    /// Battery; none = endless energy at full voltage.
+    #[serde(default)]
+    pub battery: Option<Battery>,
+}
+
+impl Airframe {
+    /// Rotor radius, in m (`rotor_radius_m`, or `0.4 * radius`).
+    pub fn rotor_radius(&self) -> f32 {
+        self.rotor_radius_m.unwrap_or(0.4 * self.radius)
+    }
+}
+
+/// Battery pack. The voltage falls linearly with the charge from `v_full` to
+/// `v_empty`, and sags under load through `r_internal`; the motors' max thrust
+/// scales with (V / `v_full`)².
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Battery {
+    /// Energy when full, in Wh.
+    pub capacity_wh: f32,
+    /// Open-circuit voltage when full, in V.
+    pub v_full: f32,
+    /// Open-circuit voltage when empty, in V.
+    pub v_empty: f32,
+    /// Internal resistance, in Ω.
+    pub r_internal: f32,
 }
 
 mod defaults {
@@ -251,6 +280,23 @@ impl DroneSpec {
         }
         if !(a.drag >= 0.0 && a.drag_quad >= 0.0) {
             return Err(SpecError::Invalid("drag must be >= 0".into()));
+        }
+        let r = a.rotor_radius();
+        if !(r.is_finite() && r > 0.0 && r < a.radius) {
+            return Err(SpecError::Invalid("rotor_radius_m must be in ]0, radius[".into()));
+        }
+        if let Some(b) = a.battery {
+            let ok = b.capacity_wh.is_finite()
+                && b.capacity_wh > 0.0
+                && b.v_empty > 0.0
+                && b.v_full > b.v_empty
+                && b.v_full.is_finite()
+                && b.r_internal >= 0.0;
+            if !ok {
+                return Err(SpecError::Invalid(
+                    "battery: need capacity_wh > 0, 0 < v_empty < v_full, r_internal >= 0".into(),
+                ));
+            }
         }
         let fov = self.camera.fov_deg;
         if !(1.0..=170.0).contains(&fov) {
@@ -367,6 +413,22 @@ mod tests {
             let spec = DroneSpec::from_ron(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
             assert!(!spec.sensors.is_empty(), "{path} has no sensor");
         }
+    }
+
+    #[test]
+    fn battery_and_rotor_radius_parse_and_default() {
+        let s = DroneSpec::scout();
+        assert_eq!(s.airframe.battery, None);
+        assert!((s.airframe.rotor_radius() - 0.4 * s.airframe.radius).abs() < 1e-6);
+        // The example commented out in mapper.ron.
+        let text = MAPPER_RON
+            .replace("// battery: Some", "battery: Some")
+            .replace("// rotor_radius_m", "rotor_radius_m");
+        let a = DroneSpec::from_ron(&text).unwrap().airframe;
+        assert_eq!(a.battery.unwrap().capacity_wh, 32.0);
+        assert_eq!(a.rotor_radius(), 0.12);
+        let bad = text.replace("v_empty: 13.2", "v_empty: 20.0");
+        assert!(matches!(DroneSpec::from_ron(&bad), Err(SpecError::Invalid(_))));
     }
 
     #[test]

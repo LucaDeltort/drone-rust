@@ -53,6 +53,7 @@ impl Estimator {
                 yaw: 0.0,
                 acceleration: Vec3::ZERO,
                 yaw_rate: 0.0,
+                angular_velocity: Vec3::ZERO,
                 flight: Default::default(),
             },
             error_m: 0.0,
