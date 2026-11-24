@@ -6,7 +6,7 @@
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
-use crate::{Heightmap, Obstacle, ObstacleShape, place, rng::SplitMix64};
+use crate::{Heightmap, Material, Obstacle, ObstacleShape, place, rng::SplitMix64};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CitySpec {
@@ -125,7 +125,22 @@ fn building(terrain: &Heightmap, spec: &CitySpec, rng: &mut SplitMix64, lot: f32
     let offset = Vec2::new(rng.range(-jitter, jitter.max(1e-6)), rng.range(-jitter, jitter.max(1e-6)));
     let yaw = rot + rng.range(-spec.jitter_deg, spec.jitter_deg.max(1e-6)).to_radians();
     let p = center + offset;
-    place(terrain, ObstacleShape::Box { size: Vec3::new(wx, height, wz) }, p.x, p.y, yaw)
+    let mut o = place(terrain, ObstacleShape::Box { size: Vec3::new(wx, height, wz) }, p.x, p.y, yaw);
+    o.material = facade(center, tower);
+    o
+}
+
+/// Facade material of a building. Its own generator, seeded by the lot: the layout
+/// of a city stays the same as before materials existed.
+fn facade(center: Vec2, tower: bool) -> Material {
+    let mut rng = SplitMix64::new(((center.x.to_bits() as u64) << 32) ^ center.y.to_bits() as u64 ^ 0x5EED_FACA_DE00_0000);
+    let roll = rng.next_f32();
+    match (tower, roll) {
+        (true, r) if r < 0.4 => Material::Glass,
+        (_, r) if r < 0.08 => Material::Dark,
+        (_, r) if r < 0.13 => Material::Metal,
+        _ => Material::Concrete,
+    }
 }
 
 fn park(
@@ -153,7 +168,9 @@ fn park(
                 continue;
             }
             let shape = ObstacleShape::Cylinder { radius: rng.range(0.25, 0.6), height: rng.range(4.0, 9.0) };
-            out.push(place(terrain, shape, p.x, p.y, rot));
+            let mut tree = place(terrain, shape, p.x, p.y, rot);
+            tree.material = Material::Foliage;
+            out.push(tree);
         }
     }
 }

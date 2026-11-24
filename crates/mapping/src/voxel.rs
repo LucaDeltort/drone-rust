@@ -415,6 +415,7 @@ mod tests {
                     z: 0.0,
                     yaw_deg: 0.0,
                     elevation_m: 0.0,
+                    material: Default::default(),
                 },
                 ObstacleSpec {
                     shape: ObstacleShape::Roof { size: Vec3::new(9.0, 2.5, 7.0) },
@@ -422,6 +423,7 @@ mod tests {
                     z: 0.0,
                     yaw_deg: 0.0,
                     elevation_m: 4.0,
+                    material: Default::default(),
                 },
             ]),
             wind: Default::default(),

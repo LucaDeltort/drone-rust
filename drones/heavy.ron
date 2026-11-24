@@ -24,7 +24,7 @@ DroneSpec(
             rate_hz: 10.0,
         ),
         (
-            kind: Sonar(cone_deg: 30.0, range: 5.0, noise_std: 0.03),
+            kind: Sonar(cone_deg: 30.0, range: 5.0, noise_std: 0.03, multipath: 0.3),
             mount: (pitch_deg: -90.0),
             rate_hz: 20.0,
         ),

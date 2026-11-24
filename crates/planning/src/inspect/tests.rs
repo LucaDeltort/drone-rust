@@ -9,7 +9,7 @@ use super::*;
 use crate::{Flight3d, Flight3dConfig};
 
 fn obstacle(shape: ObstacleShape, x: f32, z: f32, elevation_m: f32) -> ObstacleSpec {
-    ObstacleSpec { shape, x, z, yaw_deg: 0.0, elevation_m }
+    ObstacleSpec { shape, x, z, yaw_deg: 0.0, material: Default::default(), elevation_m }
 }
 
 /// A house (12 × 8 m, 5 m walls, gable roof up to 8 m) 20 m north of the take-off

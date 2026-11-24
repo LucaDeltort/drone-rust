@@ -184,6 +184,7 @@ fn summary(m: Option<&Measurement>) -> String {
             yaw_rate.to_degrees()
         ),
         Data::Baro { height } => format!("height {height:.2} m"),
-        Data::Gps { position } => format!("({:.1}, {:.1}, {:.1}) m", position.x, position.y, position.z),
+        Data::Gps { std, .. } if !std.is_finite() => "no fix (sky masked)".into(),
+        Data::Gps { position, std } => format!("({:.1}, {:.1}, {:.1}) m ±{std:.1}", position.x, position.y, position.z),
     }
 }

@@ -15,10 +15,10 @@ DroneSpec(
         pitch_deg: -10.0,
     ),
     sensors: [
-        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.0, 0.0, -0.1)), rate_hz: 20.0),
-        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.0, 0.0, 0.1), yaw_deg: 180.0), rate_hz: 20.0),
-        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (-0.1, 0.0, 0.0), yaw_deg: 90.0), rate_hz: 20.0),
-        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05), mount: (pos: (0.1, 0.0, 0.0), yaw_deg: -90.0), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05, multipath: 0.3), mount: (pos: (0.0, 0.0, -0.1)), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05, multipath: 0.3), mount: (pos: (0.0, 0.0, 0.1), yaw_deg: 180.0), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05, multipath: 0.3), mount: (pos: (-0.1, 0.0, 0.0), yaw_deg: 90.0), rate_hz: 20.0),
+        (kind: Sonar(cone_deg: 30.0, range: 4.0, noise_std: 0.05, multipath: 0.3), mount: (pos: (0.1, 0.0, 0.0), yaw_deg: -90.0), rate_hz: 20.0),
         (
             kind: Imu(accel_std: 0.2, accel_bias: 0.2, gyro_std_deg: 1.0, gyro_bias_deg: 2.0),
             rate_hz: 100.0,

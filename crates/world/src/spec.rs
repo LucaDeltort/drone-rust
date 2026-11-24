@@ -68,6 +68,23 @@ pub enum ObstaclesSpec {
     City(crate::city::CitySpec),
 }
 
+/// What a surface is made of: how range sensors see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Material {
+    /// Matte and opaque: clean returns (walls, ground).
+    #[default]
+    Concrete,
+    /// Windows: most lidar and depth rays go through, some reflect off it.
+    Glass,
+    /// Dark paint, tinted surfaces: weak returns, only at short range.
+    Dark,
+    /// Shiny metal (cars, roofs, poles): noisier, sometimes a phantom echo behind it
+    /// (the ray bounced away before coming back).
+    Metal,
+    /// Leaves: partial returns from inside the canopy, short of its outline.
+    Foliage,
+}
+
 /// An obstacle of a hand-drawn map. Its base height comes from the terrain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObstacleSpec {
@@ -79,6 +96,8 @@ pub struct ObstacleSpec {
     /// Height of the base above the ground, in m: lintels, slabs, roofs, bridges.
     #[serde(default)]
     pub elevation_m: f32,
+    #[serde(default)]
+    pub material: Material,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

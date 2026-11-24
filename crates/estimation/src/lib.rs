@@ -156,7 +156,7 @@ impl Ekf {
                 self.last_imu_t = Some(m.t);
             }
             Data::Baro { height } => self.update_height(height),
-            Data::Gps { position } => self.update_position(position),
+            Data::Gps { position, std } if std.is_finite() => self.update_position(position, std),
             _ => {}
         }
     }
@@ -224,13 +224,14 @@ impl Ekf {
         self.correct(h, r, z);
     }
 
-    /// Correction by an absolute position (GPS).
-    pub fn update_position(&mut self, position: Vec3) {
+    /// Correction by an absolute position (GPS) of accuracy `std` (1σ per axis, m).
+    /// The filter trusts it no more than the GPS's configured noise.
+    pub fn update_position(&mut self, position: Vec3, std: f32) {
         let mut h = SMatrix::<f32, 3, N>::zeros();
         for k in 0..3 {
             h[(k, P + k)] = 1.0;
         }
-        let r = SMatrix::<f32, 3, 3>::identity() * self.cfg.gps_std.powi(2);
+        let r = SMatrix::<f32, 3, 3>::identity() * std.max(self.cfg.gps_std).powi(2);
         let z = SVector::<f32, 3>::from_fn(|k, _| position[k] - self.x[P + k]);
         self.correct(h, r, z);
     }

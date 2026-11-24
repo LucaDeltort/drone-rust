@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 
 use drone_spec::{Mount, SensorKind, SensorSpec};
 use glam::{EulerRot, Quat, Vec3};
-use world::{World, drone::DroneState, rng::SplitMix64};
+use world::{Material, World, drone::DroneState, rng::SplitMix64};
 
 /// Pose and motion of the drone (ground truth), from which the pose of each
 /// sensor and what the navigation sensors measure are derived.
@@ -148,8 +148,14 @@ pub(crate) fn cast_beams(
     let one = |(i, &dir): (usize, &Vec3)| {
         let mut rng = SplitMix64::new(base ^ (i as u64 + 1).wrapping_mul(0xD1B5_4A32_D192_ED03));
         let (origin, rotation) = pose(i);
-        let hit = world.raycast(origin, rotation * dir, max_range).map(|h| h.distance);
-        Beam::measured(dir, hit, min_range, max_range, noise, &mut rng)
+        match optical_return(world, origin, rotation * dir, max_range, &mut rng) {
+            Return::Nothing => Beam::nothing(dir),
+            Return::Lost => Beam::invalid(dir),
+            Return::Hit { distance, noise_scale } => {
+                let noise = Noise { std_m: noise.std_m * noise_scale, ..*noise };
+                Beam::measured(dir, Some(distance), min_range, max_range, &noise, &mut rng)
+            }
+        }
     };
     #[cfg(feature = "parallel")]
     {
@@ -181,8 +187,67 @@ pub enum Data {
     Imu { accel: Vec3, yaw_rate: f32 },
     /// Absolute height, in m.
     Baro { height: f32 },
-    /// Absolute position, in m.
-    Gps { position: Vec3 },
+    /// Absolute position, in m, and its announced accuracy (1σ per axis, in m),
+    /// which degrades when buildings mask the sky. Infinite: no fix.
+    Gps { position: Vec3, std: f32 },
+}
+
+/// What a light ray (lidar, depth camera) brings back, before the noise.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Return {
+    Nothing,
+    /// No usable return (weak or scattered signal).
+    Lost,
+    Hit { distance: f32, noise_scale: f32 },
+}
+
+/// Fraction of the light rays that go through glass.
+const GLASS_PASS: f32 = 0.7;
+/// Dark surfaces only return within this share of the max range...
+const DARK_RANGE: f32 = 0.35;
+/// ...and lose this share of their returns even there.
+const DARK_LOSS: f32 = 0.2;
+/// Metal: noise multiplier, and share of phantom echoes (bounced away and back).
+const METAL_NOISE: f32 = 3.0;
+const METAL_PHANTOM: f32 = 0.05;
+/// Foliage: returns come from up to this depth inside the canopy, in m.
+const FOLIAGE_DEPTH: f32 = 1.0;
+
+/// Follows a light ray through the world, surface by surface, as its material
+/// decides: through glass, lost on dark paint, echoing off metal, scattered in leaves.
+pub(crate) fn optical_return(world: &World, origin: Vec3, dir: Vec3, max_range: f32, rng: &mut SplitMix64) -> Return {
+    let mut start = 0.0;
+    let mut in_pane = false;
+    // A few panes of glass at most, crossed 5 cm at a time.
+    for _ in 0..32 {
+        let Some(hit) = world.raycast(origin + dir * start, dir, max_range - start) else { return Return::Nothing };
+        let d = start + hit.distance;
+        let found = |distance: f32, noise_scale: f32| Return::Hit { distance, noise_scale };
+        // Still inside the pane it went through (a hit right at the start): no new
+        // chance to reflect.
+        if in_pane && hit.material == Material::Glass && hit.distance < 1e-4 {
+            start = d + 0.05;
+            continue;
+        }
+        return match hit.material {
+            Material::Concrete => found(d, 1.0),
+            Material::Glass if rng.next_f32() < GLASS_PASS => {
+                start = d + 0.02;
+                in_pane = true;
+                continue;
+            }
+            Material::Glass => found(d, 1.0),
+            Material::Dark if d > DARK_RANGE * max_range || rng.next_f32() < DARK_LOSS => Return::Lost,
+            Material::Dark => found(d, 1.0),
+            Material::Metal if rng.next_f32() < METAL_PHANTOM => {
+                let phantom = d * rng.range(1.2, 2.0);
+                if phantom <= max_range { found(phantom, METAL_NOISE) } else { Return::Nothing }
+            }
+            Material::Metal => found(d, METAL_NOISE),
+            Material::Foliage => found(d + rng.range(0.0, FOLIAGE_DEPTH), 1.0),
+        };
+    }
+    Return::Lost
 }
 
 /// Pose of a sensor at a fraction `f` of its sweep, from its pose at the start of
@@ -279,7 +344,8 @@ pub fn build(spec: &SensorSpec, seed: u64) -> Box<dyn Sensor> {
                 rng,
             ))
         }
-        SensorKind::Sonar { cone_deg, range, noise_std, max_incidence_deg } => Box::new(Sonar::new(
+        SensorKind::Sonar { cone_deg, range, noise_std, max_incidence_deg, multipath } => Box::new(
+            Sonar::new(
             spec.mount,
             spec.rate_hz,
             cone_deg,
@@ -287,7 +353,9 @@ pub fn build(spec: &SensorSpec, seed: u64) -> Box<dyn Sensor> {
             max_incidence_deg,
             Noise { std_m: noise_std, growth_per_m2: 0.0, dropout: 0.0 },
             rng,
-        )),
+            )
+            .with_multipath(multipath),
+        ),
         SensorKind::Depth { width, height, fov_deg, range, noise_std, noise_growth, dropout } => {
             Box::new(DepthCamera::new(
                 spec.mount,
@@ -414,6 +482,7 @@ pub(crate) mod test_util {
                 z: -11.0,
                 yaw_deg: 0.0,
                 elevation_m: 0.0,
+                material: Default::default(),
             }]),
             wind: Default::default(),
         })
@@ -438,7 +507,7 @@ mod tests {
     fn suite_respects_rates() {
         let w = test_util::wall_world();
         let sonar = SensorSpec {
-            kind: SensorKind::Sonar { cone_deg: 20.0, range: 4.0, noise_std: 0.0, max_incidence_deg: 60.0 },
+            kind: SensorKind::Sonar { cone_deg: 20.0, range: 4.0, noise_std: 0.0, max_incidence_deg: 60.0, multipath: 0.0 },
             mount: Mount::default(),
             rate_hz: 20.0,
             latency_s: 0.0,
@@ -582,5 +651,70 @@ mod tests {
         }
         assert!(raw > 0.1, "no distortion: {raw}");
         assert!(deskewed < 1e-3, "deskewed off the wall by {deskewed}");
+    }
+
+    /// A wall 10 m ahead (-Z) made of `material`, a concrete one behind it at 20 m.
+    fn material_world(material: Material) -> World {
+        use world::{ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainSpec, WorldSpec};
+        let wall = |z: f32, material| ObstacleSpec {
+            shape: ObstacleShape::Box { size: Vec3::new(40.0, 10.0, 0.2) },
+            x: 0.0,
+            z,
+            yaw_deg: 0.0,
+            elevation_m: 0.0,
+            material,
+        };
+        World::build(&WorldSpec {
+            size_m: 100.0,
+            cell_m: 1.0,
+            terrain: TerrainSpec::Flat { height: 0.0 },
+            obstacles: ObstaclesSpec::List(vec![wall(-10.1, material), wall(-20.1, Material::Concrete)]),
+            wind: Default::default(),
+        })
+        .unwrap()
+    }
+
+    /// What 2000 straight-ahead rays from 2 m up bring back.
+    fn returns(material: Material, range: f32) -> Vec<Return> {
+        let w = material_world(material);
+        let mut rng = SplitMix64::new(7);
+        (0..2000).map(|_| optical_return(&w, Vec3::new(0.0, 2.0, 0.0), Vec3::NEG_Z, range, &mut rng)).collect()
+    }
+
+    fn share(r: &[Return], f: impl Fn(&Return) -> bool) -> f32 {
+        r.iter().filter(|x| f(x)).count() as f32 / r.len() as f32
+    }
+
+    #[test]
+    fn glass_lets_most_rays_through() {
+        let r = returns(Material::Glass, 30.0);
+        let at = |d: f32| move |x: &Return| matches!(x, Return::Hit { distance, .. } if (distance - d).abs() < 0.01);
+        assert!((share(&r, at(10.0)) - (1.0 - GLASS_PASS)).abs() < 0.04);
+        assert!((share(&r, at(20.0)) - GLASS_PASS).abs() < 0.04);
+    }
+
+    #[test]
+    fn dark_surfaces_only_answer_up_close() {
+        // 10 m is beyond 35 % of a 25 m range: always lost.
+        assert_eq!(share(&returns(Material::Dark, 25.0), |x| matches!(x, Return::Lost)), 1.0);
+        // Within reach (40 m): only some losses.
+        let lost = share(&returns(Material::Dark, 40.0), |x| matches!(x, Return::Lost));
+        assert!((lost - DARK_LOSS).abs() < 0.04, "{lost}");
+    }
+
+    #[test]
+    fn metal_is_noisier_and_sometimes_echoes_behind() {
+        let r = returns(Material::Metal, 30.0);
+        let phantom = share(&r, |x| matches!(x, Return::Hit { distance, .. } if *distance > 10.5));
+        assert!((phantom - METAL_PHANTOM).abs() < 0.02, "{phantom}");
+        assert!(r.iter().all(|x| matches!(x, Return::Hit { noise_scale, .. } if *noise_scale == METAL_NOISE)));
+    }
+
+    #[test]
+    fn foliage_returns_from_inside_the_canopy() {
+        let r = returns(Material::Foliage, 30.0);
+        assert!(r.iter().all(|x| matches!(x, Return::Hit { distance, .. } if (10.0..=10.0 + FOLIAGE_DEPTH).contains(distance))));
+        let deep = share(&r, |x| matches!(x, Return::Hit { distance, .. } if *distance > 10.5));
+        assert!((deep - 0.5).abs() < 0.05, "{deep}");
     }
 }

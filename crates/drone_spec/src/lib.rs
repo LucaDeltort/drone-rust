@@ -90,6 +90,11 @@ pub enum SensorKind {
         /// Beyond this incidence angle, the surface returns no echo.
         #[serde(default = "default_max_incidence")]
         max_incidence_deg: f32,
+        /// Multipath: chance that an echo off an oblique surface bounces off a second
+        /// one before coming back, and reads too far (0: never; scaled by the
+        /// obliquity).
+        #[serde(default)]
+        multipath: f32,
     },
     /// Depth image within a field of view (horizontal FOV).
     Depth {
@@ -359,7 +364,10 @@ impl SensorSpec {
                 non_neg("noise_std", noise_std)?;
                 unit("dropout", dropout)
             }
-            SensorKind::Sonar { cone_deg, range, noise_std, max_incidence_deg } => {
+            SensorKind::Sonar { cone_deg, range, noise_std, max_incidence_deg, multipath } => {
+                if !(0.0..=1.0).contains(&multipath) {
+                    return Err("multipath out of 0..=1".into());
+                }
                 if !(0.0 < cone_deg && cone_deg < 180.0) {
                     return Err("cone_deg out of ]0, 180[".into());
                 }

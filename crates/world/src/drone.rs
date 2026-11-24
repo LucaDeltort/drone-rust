@@ -598,6 +598,7 @@ mod tests {
             z: -10.0,
             yaw_deg: 0.0,
             elevation_m: 0.0,
+            material: Default::default(),
         };
         let w = world_with(ObstaclesSpec::List(vec![wall]), WindSpec::default());
         let mut s = DroneState::spawn(&w, 0.0, 0.0, 3.0);

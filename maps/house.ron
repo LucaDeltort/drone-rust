@@ -64,11 +64,11 @@ WorldSpec(
         // Garden fence: low enough to fly over.
         (shape: Box(size: (0.1, 0.9, 26.0)), x: -38.0, z: -16.0),
         (shape: Box(size: (28.0, 0.9, 0.1)), x: -24.0, z: -29.0),
-        // Garden trees: trunks, and canopies the drone can pass under.
+        // Garden trees: trunks, and leafy canopies the drone can pass under.
         (shape: Cylinder(radius: 0.3, height: 7.0), x: -33.0, z: -24.0),
-        (shape: Box(size: (3.0, 3.0, 3.0)), x: -33.0, z: -24.0, elevation_m: 3.5),
+        (shape: Box(size: (3.0, 3.0, 3.0)), x: -33.0, z: -24.0, elevation_m: 3.5, material: Foliage),
         (shape: Cylinder(radius: 0.35, height: 8.0), x: -8.0, z: -6.0),
-        (shape: Box(size: (3.5, 3.5, 3.5)), x: -8.0, z: -6.0, elevation_m: 4.0, yaw_deg: 20.0),
+        (shape: Box(size: (3.5, 3.5, 3.5)), x: -8.0, z: -6.0, elevation_m: 4.0, yaw_deg: 20.0, material: Foliage),
         (shape: Cylinder(radius: 0.25, height: 6.0), x: -30.0, z: -3.0),
 
         // ---------------------------------------------------------- Big building
@@ -88,17 +88,18 @@ WorldSpec(
         (shape: Box(size: (10.0, 0.3, 3.5)), x: 17.0, z: -0.7, elevation_m: 3.6),
         (shape: Cylinder(radius: 0.2, height: 3.6), x: 12.5, z: -2.2),
         (shape: Cylinder(radius: 0.2, height: 3.6), x: 21.5, z: -2.2),
-        // A sloped glass roof over the wing's terrace.
-        (shape: Roof(size: (10.0, 2.0, 6.0)), x: 22.0, z: 22.0, yaw_deg: 90.0, elevation_m: 6.0),
+        // A sloped glass roof over the wing's terrace: lidar rays mostly go through.
+        (shape: Roof(size: (10.0, 2.0, 6.0)), x: 22.0, z: 22.0, yaw_deg: 90.0, elevation_m: 6.0, material: Glass),
         (shape: Box(size: (8.0, 6.0, 12.0)), x: 22.0, z: 22.0),
 
         // ----------------------------------------------------- Car park, streetlights
-        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -12.0),
-        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -15.0),
-        (shape: Box(size: (4.8, 1.8, 2.0)), x: 20.0, z: -12.0, yaw_deg: 5.0),
-        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -8.0),
-        (shape: Cylinder(radius: 0.12, height: 6.0), x: 24.0, z: -8.0),
-        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -20.0),
+        // Shiny cars and metal poles: noisy returns, the odd phantom echo; one dark car.
+        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -12.0, material: Metal),
+        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -15.0, material: Dark),
+        (shape: Box(size: (4.8, 1.8, 2.0)), x: 20.0, z: -12.0, yaw_deg: 5.0, material: Metal),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -8.0, material: Metal),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 24.0, z: -8.0, material: Metal),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -20.0, material: Metal),
 
         // --------------------------------------------------------- On the hills
         (shape: Cylinder(radius: 0.4, height: 9.0), x: -45.0, z: 35.0),

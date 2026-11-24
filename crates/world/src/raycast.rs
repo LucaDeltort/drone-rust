@@ -5,7 +5,7 @@
 
 use glam::{Quat, Vec3};
 
-use crate::{Obstacle, ObstacleShape, World};
+use crate::{Material, Obstacle, ObstacleShape, World};
 
 /// Hit point of a ray.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -15,6 +15,7 @@ pub struct Hit {
     pub point: Vec3,
     /// Unit normal of the hit surface, facing the ray.
     pub normal: Vec3,
+    pub material: Material,
 }
 
 impl World {
@@ -65,6 +66,7 @@ impl World {
                 distance: 0.0,
                 point: origin,
                 normal: -dir,
+                material: Material::Concrete,
             });
         }
         let step = t.cell_m() * 0.5;
@@ -89,6 +91,7 @@ impl World {
                     distance: hi,
                     point,
                     normal: self.terrain_normal(point.x, point.z),
+                    material: Material::Concrete,
                 });
             }
             if s >= max_distance {
@@ -110,6 +113,10 @@ impl World {
 }
 
 fn ray_obstacle(o: &Obstacle, origin: Vec3, dir: Vec3, max: f32) -> Option<Hit> {
+    ray_shape(o, origin, dir, max).map(|h| Hit { material: o.material, ..h })
+}
+
+fn ray_shape(o: &Obstacle, origin: Vec3, dir: Vec3, max: f32) -> Option<Hit> {
     match o.shape {
         ObstacleShape::Box { size } => {
             let center = o.base + Vec3::Y * (size.y / 2.0);
@@ -124,6 +131,7 @@ fn ray_obstacle(o: &Obstacle, origin: Vec3, dir: Vec3, max: f32) -> Option<Hit> 
                 distance: t,
                 point: origin + dir * t,
                 normal: rot * n,
+                material: Material::Concrete,
             })
         }
     }
@@ -213,6 +221,7 @@ fn ray_box(center: Vec3, rot: Quat, half: Vec3, origin: Vec3, dir: Vec3, max: f3
         distance: t,
         point: origin + dir * t,
         normal,
+        material: Material::Concrete,
     })
 }
 
@@ -226,6 +235,7 @@ fn ray_cylinder(base: Vec3, r: f32, h: f32, origin: Vec3, dir: Vec3, max: f32) -
             distance: 0.0,
             point: origin,
             normal: -dir,
+            material: Material::Concrete,
         });
     }
     let mut best: Option<(f32, Vec3)> = None;
@@ -262,6 +272,7 @@ fn ray_cylinder(base: Vec3, r: f32, h: f32, origin: Vec3, dir: Vec3, max: f32) -
         distance: t,
         point: origin + dir * t,
         normal,
+        material: Material::Concrete,
     })
 }
 
@@ -317,6 +328,7 @@ mod tests {
             z: 0.0,
             yaw_deg: 0.0,
             elevation_m: 0.0,
+            material: Default::default(),
         }]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::X, 50.0).unwrap();
         assert!(close(h.distance, 9.0));
@@ -333,6 +345,7 @@ mod tests {
             z: 0.0,
             yaw_deg: 45.0,
             elevation_m: 0.0,
+            material: Default::default(),
         }]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::X, 50.0).unwrap();
         assert!(close(h.distance, 10.0 - 2f32.sqrt()), "{}", h.distance);
@@ -346,6 +359,7 @@ mod tests {
             z: -10.0,
             yaw_deg: 0.0,
             elevation_m: 0.0,
+            material: Default::default(),
         }]);
         let side = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z, 50.0).unwrap();
         assert!(close(side.distance, 9.0));
@@ -363,6 +377,7 @@ mod tests {
             z: 0.0,
             yaw_deg: 0.0,
             elevation_m: 4.0,
+            material: Default::default(),
         }]);
         // Straight down onto the ridge: top at 4 + 3 = 7 m.
         let h = w.raycast(Vec3::new(0.0, 20.0, 0.0), Vec3::NEG_Y, 50.0).unwrap();
@@ -390,6 +405,7 @@ mod tests {
             z,
             yaw_deg: 0.0,
             elevation_m: 0.0,
+            material: Default::default(),
         };
         let w = world(vec![cyl(-20.0), cyl(-8.0)]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z, 50.0).unwrap();

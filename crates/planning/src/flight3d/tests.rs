@@ -81,6 +81,7 @@ fn wall_world(height: f32, terrain: TerrainSpec) -> World {
             z: -15.0,
             yaw_deg: 0.0,
             elevation_m: 0.0,
+            material: Default::default(),
         }]),
         wind: Default::default(),
     })

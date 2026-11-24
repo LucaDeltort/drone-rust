@@ -19,7 +19,7 @@ mod wind;
 pub use city::CitySpec;
 pub use collision::Contact;
 pub use raycast::Hit;
-pub use spec::{ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainFeature, TerrainSpec, WorldSpec};
+pub use spec::{Material, ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainFeature, TerrainSpec, WorldSpec};
 pub use wind::{Wind, WindSpec};
 pub use terrain::Heightmap;
 
@@ -35,6 +35,7 @@ pub struct Obstacle {
     pub base: Vec3,
     /// Rotation around Y, in radians.
     pub yaw: f32,
+    pub material: Material,
 }
 
 impl Obstacle {
@@ -111,6 +112,7 @@ impl World {
                 .iter()
                 .map(|o| {
                     let mut p = place(&terrain, o.shape, o.x, o.z, o.yaw_deg.to_radians());
+                    p.material = o.material;
                     p.base.y += o.elevation_m;
                     p
                 })
@@ -208,6 +210,7 @@ fn place(terrain: &Heightmap, shape: ObstacleShape, x: f32, z: f32, yaw: f32) ->
         shape,
         base: Vec3::new(x, 0.0, z),
         yaw,
+        material: Material::Concrete,
     };
     let r = o.footprint_radius();
     let ground = [(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r)]

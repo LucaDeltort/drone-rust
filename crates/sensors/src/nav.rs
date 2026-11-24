@@ -3,7 +3,9 @@
 //! - IMU: acceleration in the drone frame and yaw rate, with white noise and
 //!   bias (drawn at start-up, then a slow random walk);
 //! - barometer: absolute height, noise and slow drift;
-//! - GPS: noisy absolute position.
+//! - GPS: noisy absolute position. Buildings mask part of the sky: fewer
+//!   satellites, a worse accuracy, a slow multipath bias, and below four
+//!   satellites no fix at all (urban canyon).
 
 use drone_spec::Mount;
 use glam::{Quat, Vec3};
@@ -142,12 +144,40 @@ pub struct Gps {
     mount: Mount,
     rate_hz: f32,
     noise: Noise,
+    /// Multipath bias, in m: reflections off the facades, slowly changing.
+    bias: Vec3,
     rng: SplitMix64,
 }
 
+/// Directions of the satellites in view in the open: (azimuth, elevation), in
+/// degrees. Four elevations, staggered azimuths.
+const SKY: [(f32, f32); 16] = [
+    (0.0, 15.0), (90.0, 15.0), (180.0, 15.0), (270.0, 15.0),
+    (45.0, 30.0), (135.0, 30.0), (225.0, 30.0), (315.0, 30.0),
+    (20.0, 50.0), (110.0, 50.0), (200.0, 50.0), (290.0, 50.0),
+    (65.0, 75.0), (155.0, 75.0), (245.0, 75.0), (335.0, 75.0),
+];
+/// Fewer satellites than this: no fix.
+const MIN_SATELLITES: usize = 4;
+/// Accuracy multiplier with the whole sky masked (scaled by the masked share²).
+const MASKED_STD: f32 = 9.0;
+/// Time constant of the multipath bias, in s.
+const MULTIPATH_TAU_S: f32 = 10.0;
+
 impl Gps {
     pub fn new(mount: Mount, rate_hz: f32, noise_std: f32, rng: SplitMix64) -> Self {
-        Self { mount, rate_hz, noise: Noise { std_m: noise_std, growth_per_m2: 0.0, dropout: 0.0 }, rng }
+        Self { mount, rate_hz, noise: Noise { std_m: noise_std, growth_per_m2: 0.0, dropout: 0.0 }, bias: Vec3::ZERO, rng }
+    }
+
+    /// Satellites in view from `at`: the sky directions no obstacle masks.
+    pub fn satellites(world: &World, at: Vec3) -> usize {
+        SKY.iter()
+            .filter(|(az, el)| {
+                let (az, el) = (az.to_radians(), el.to_radians());
+                let dir = Vec3::new(az.sin() * el.cos(), el.sin(), -az.cos() * el.cos());
+                world.raycast(at, dir, 500.0).is_none()
+            })
+            .count()
     }
 }
 
@@ -168,8 +198,20 @@ impl Sensor for Gps {
         &mut self.noise
     }
 
-    fn measure(&mut self, _world: &World, _body: &Pose, origin: Vec3, _rotation: Quat) -> Data {
-        Data::Gps { position: origin + gaussian3(&mut self.rng) * self.noise.std_m }
+    fn measure(&mut self, world: &World, _body: &Pose, origin: Vec3, _rotation: Quat) -> Data {
+        let seen = Self::satellites(world, origin);
+        let masked = 1.0 - seen as f32 / SKY.len() as f32;
+        let base = self.noise.std_m;
+        // The bias relaxes towards zero, kicked in proportion to the masked sky.
+        let dt = 1.0 / self.rate_hz;
+        let keep = (-dt / MULTIPATH_TAU_S).exp();
+        let kick = base * 2.0 * masked * (1.0 - keep * keep).sqrt();
+        self.bias = self.bias * keep + gaussian3(&mut self.rng) * kick;
+        if seen < MIN_SATELLITES {
+            return Data::Gps { position: origin, std: f32::INFINITY };
+        }
+        let std = base * (1.0 + MASKED_STD * masked * masked);
+        Data::Gps { position: origin + self.bias + gaussian3(&mut self.rng) * std, std }
     }
 }
 
@@ -177,6 +219,7 @@ impl Sensor for Gps {
 mod tests {
     use super::*;
     use crate::test_util::wall_world;
+    use world::{ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainSpec, WorldSpec};
 
     fn moving_body() -> Pose {
         Pose {
@@ -228,7 +271,9 @@ mod tests {
     #[test]
     fn baro_and_gps_center_on_the_truth() {
         let w = wall_world();
-        let b = moving_body();
+        // In the open: far from the wall, the whole sky is in view.
+        let b = Pose { position: Vec3::new(1.0, 2.0, 40.0), ..moving_body() };
+        assert_eq!(Gps::satellites(&w, b.position), SKY.len());
         let mut baro = Baro::new(Mount::default(), 25.0, 0.1, 0.0, SplitMix64::new(2));
         let mut gps = Gps::new(Mount::default(), 5.0, 0.5, SplitMix64::new(3));
         let (mut h, mut p) = (0.0, Vec3::ZERO);
@@ -237,10 +282,48 @@ mod tests {
             if let Data::Baro { height } = baro.measure(&w, &b, b.position, b.rotation) {
                 h += height / n as f32;
             }
-            if let Data::Gps { position } = gps.measure(&w, &b, b.position, b.rotation) {
+            if let Data::Gps { position, .. } = gps.measure(&w, &b, b.position, b.rotation) {
                 p += position / n as f32;
             }
         }
         assert!((h - 2.0).abs() < 0.01 && (p - b.position).length() < 0.05, "{h} {p}");
+    }
+
+    #[test]
+    fn a_wall_masks_the_sky_and_degrades_the_fix() {
+        let w = wall_world();
+        let mut gps = Gps::new(Mount::default(), 5.0, 0.5, SplitMix64::new(3));
+        // Right at the foot of the 10 m wall: the sky to the north (-Z) is gone.
+        let at = Vec3::new(0.0, 1.0, -8.5);
+        let seen = Gps::satellites(&w, at);
+        assert!((MIN_SATELLITES..SKY.len()).contains(&seen), "{seen}");
+        let Data::Gps { std, .. } = gps.measure(&w, &Pose::new(at, Quat::IDENTITY), at, Quat::IDENTITY) else { panic!() };
+        assert!(std > 0.5 * 1.5, "{std}");
+    }
+
+    #[test]
+    fn a_canyon_gives_no_fix() {
+        // A 30 m deep well of walls around the drone.
+        let wall = |x: f32, z: f32, sx: f32, sz: f32| ObstacleSpec {
+            shape: ObstacleShape::Box { size: Vec3::new(sx, 30.0, sz) },
+            x,
+            z,
+            yaw_deg: 0.0,
+            elevation_m: 0.0,
+            material: Default::default(),
+        };
+        let w = World::build(&WorldSpec {
+            size_m: 100.0,
+            cell_m: 1.0,
+            terrain: TerrainSpec::Flat { height: 0.0 },
+            obstacles: ObstaclesSpec::List(vec![wall(0.0, -4.0, 10.0, 1.0), wall(0.0, 4.0, 10.0, 1.0), wall(-4.0, 0.0, 1.0, 10.0), wall(4.0, 0.0, 1.0, 10.0)]),
+            wind: Default::default(),
+        })
+        .unwrap();
+        let mut gps = Gps::new(Mount::default(), 5.0, 0.5, SplitMix64::new(3));
+        let at = Vec3::new(0.0, 2.0, 0.0);
+        assert!(Gps::satellites(&w, at) < MIN_SATELLITES);
+        let Data::Gps { std, .. } = gps.measure(&w, &Pose::new(at, Quat::IDENTITY), at, Quat::IDENTITY) else { panic!() };
+        assert!(std.is_infinite());
     }
 }
