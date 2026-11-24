@@ -2,7 +2,7 @@ use drone_spec::Mount;
 use glam::{Quat, Vec3};
 use world::{World, rng::SplitMix64};
 
-use crate::{Beam, Data, Noise, Pose, Sensor};
+use crate::{Data, Noise, Pose, Sensor};
 
 /// Distance below which the lidar sees nothing, in m.
 const MIN_RANGE: f32 = 0.1;
@@ -57,14 +57,7 @@ impl Sensor for Lidar2D {
     }
 
     fn measure(&mut self, world: &World, _body: &Pose, origin: Vec3, rotation: Quat) -> Data {
-        let beams = self
-            .dirs
-            .iter()
-            .map(|&dir| {
-                let hit = world.raycast(origin, rotation * dir, self.range).map(|h| h.distance);
-                Beam::measured(dir, hit, MIN_RANGE, self.range, &self.noise, &mut self.rng)
-            })
-            .collect();
+        let beams = crate::cast_beams(world, origin, rotation, &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
         Data::Scan { beams, max_range: self.range }
     }
 }

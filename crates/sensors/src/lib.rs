@@ -111,6 +111,35 @@ impl Beam {
     }
 }
 
+/// Casts a fan of rays (directions in the sensor frame) and measures each one.
+///
+/// Each ray draws its noise from its own generator, seeded from one draw of the
+/// sensor's: the rays can be cast in parallel and the result stays the same,
+/// whatever the order in which they run.
+pub(crate) fn cast_beams(
+    world: &World,
+    origin: Vec3,
+    rotation: Quat,
+    dirs: &[Vec3],
+    (min_range, max_range): (f32, f32),
+    noise: &Noise,
+    rng: &mut SplitMix64,
+) -> Vec<Beam> {
+    let base = rng.next_u64();
+    let one = |(i, &dir): (usize, &Vec3)| {
+        let mut rng = SplitMix64::new(base ^ (i as u64 + 1).wrapping_mul(0xD1B5_4A32_D192_ED03));
+        let hit = world.raycast(origin, rotation * dir, max_range).map(|h| h.distance);
+        Beam::measured(dir, hit, min_range, max_range, noise, &mut rng)
+    };
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        dirs.par_iter().enumerate().with_min_len(64).map(one).collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    dirs.iter().enumerate().map(one).collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Data {
     /// Fan of rays (2D lidar).

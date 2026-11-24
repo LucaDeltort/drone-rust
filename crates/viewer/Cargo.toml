@@ -11,6 +11,7 @@ drone_spec = { version = "0.1.0", path = "../drone_spec" }
 estimation = { version = "0.1.0", path = "../estimation" }
 mapping = { version = "0.1.0", path = "../mapping" }
 planning = { version = "0.1.0", path = "../planning" }
+rustc-hash = "2.1.3"
 sensors = { version = "0.1.0", path = "../sensors" }
 sim = { version = "0.1.0", path = "../sim" }
 world = { version = "0.1.0", path = "../world" }

@@ -352,8 +352,8 @@ mod tests {
     /// does no harm where it does not.
     #[test]
     fn scan_matching_bounds_the_drift_without_gps() {
-        let fly = |scan_match: bool, cmd: Command| {
-            let cfg = SimConfig { mode: PoseMode::Ekf { gps: false }, scan_match, ..Default::default() };
+        let fly = |scan_match: bool, cmd: Command, seed: u64| {
+            let cfg = SimConfig { mode: PoseMode::Ekf { gps: false }, scan_match, seed, ..Default::default() };
             let mut sim = Sim::new(corridor(), &DroneSpec::scout(), cfg).unwrap();
             for _ in 0..1000 {
                 sim.step(cmd);
@@ -368,16 +368,22 @@ mod tests {
             sim
         };
         // Hovering in sight of walls and corners: the pose is held.
-        let without = fly(false, Command::default());
-        let with = fly(true, Command::default());
+        let without = fly(false, Command::default(), 1);
+        let with = fly(true, Command::default(), 1);
         assert!(with.scan_matches > 90, "{} matches", with.scan_matches);
         assert!(with.pose_rms() < 0.1 && with.pose_rms() < without.pose_rms() / 3.0);
         // Straight down the corridor: its walls say nothing about the position
         // along it, so the drift there is the IMU's; matching must not make it worse.
+        // A single run depends on its noise draw: compare over several seeds.
         let cmd = Command { forward: 0.3, ..Default::default() };
-        let without = fly(false, cmd);
-        let with = fly(true, cmd);
-        assert!(with.pose_rms() < without.pose_rms() * 1.2);
-        assert_eq!(with.collisions, 0);
+        let (mut rms_without, mut rms_with) = (0.0, 0.0);
+        for seed in 1..=6 {
+            rms_without += fly(false, cmd, seed).pose_rms();
+            let with = fly(true, cmd, seed);
+            rms_with += with.pose_rms();
+            assert_eq!(with.collisions, 0);
+        }
+        assert!(rms_with < rms_without * 1.2, "{rms_with} vs {rms_without}");
     }
+
 }

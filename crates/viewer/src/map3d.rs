@@ -7,7 +7,7 @@
 //! [`planning::Flight3d`] sets the altitude from the surfaces ahead and holds the
 //! drone back from what stands at its height.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -18,7 +18,7 @@ use bevy::{
 };
 use bevy_egui::egui;
 use drone_spec::SensorKind;
-use mapping::{Key, VoxelMap};
+use mapping::{CHUNK, VoxelMap};
 use planning::{Flight3d, Flight3dConfig};
 
 use crate::{
@@ -33,18 +33,21 @@ use crate::{
 
 /// Voxel side, in m.
 const VOXEL_M: f32 = 0.4;
-/// Mesh refresh period, in s.
-const REDRAW_S: f32 = 0.5;
+/// Mesh refresh period, in s. Only the chunks that changed are remeshed.
+const REDRAW_S: f32 = 0.2;
 
 #[derive(Resource)]
 pub struct Map3d {
     pub map: VoxelMap,
     last_t: Vec<f64>,
-    drawn: Option<u64>,
-    mesh: Handle<Mesh>,
+    /// One mesh entity per chunk that has occupied voxels.
+    chunks: HashMap<IVec3, Entity>,
+    material: Handle<StandardMaterial>,
+    /// Height range (y keys) of the color scale. It only grows (until the map is
+    /// emptied): a wider range recolors every chunk.
+    y_range: Option<(i32, i32)>,
     show: bool,
     show_world: bool,
-    voxels: usize,
     mode: Option<sim::PoseMode>,
     /// 3D flight: climb over what can be flown over.
     pub three_d: bool,
@@ -65,47 +68,25 @@ impl Plugin for Map3dPlugin {
     }
 }
 
-fn setup(
-    mut commands: Commands,
-    config: Res<DroneConfig>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mesh = meshes.add(empty_mesh());
-    commands.spawn((
-        Mesh3d(mesh.clone()),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.9,
-            ..default()
-        })),
-        Transform::IDENTITY,
-        // Outside view only: the onboard camera sees the real world.
-        RenderLayers::layer(DRONE_LAYER),
-        NotShadowCaster,
-        VoxelMesh,
-    ));
+fn setup(mut commands: Commands, config: Res<DroneConfig>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let material = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        perceptual_roughness: 0.9,
+        ..default()
+    });
     commands.insert_resource(Map3d {
         map: VoxelMap::new(VOXEL_M),
         last_t: Vec::new(),
-        drawn: None,
-        mesh,
+        chunks: HashMap::default(),
+        material,
+        y_range: None,
         show: true,
         // Non-interactive check: `VIEWER_MAP_ONLY=1` starts with the real world hidden.
         show_world: std::env::var_os("VIEWER_MAP_ONLY").is_none(),
-        voxels: 0,
         mode: None,
         three_d: config.0.sensors.iter().any(|s| matches!(s.kind, SensorKind::Lidar3D { .. })),
         flight: Flight3d::new(Flight3dConfig::default()),
     });
-}
-
-fn empty_mesh() -> Mesh {
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
-        .with_inserted_indices(Indices::U32(Vec::new()))
 }
 
 /// Integrates each new range measurement, from the pose the drone believes it has;
@@ -199,12 +180,9 @@ fn height_color(k: f32) -> [f32; 4] {
     [c.red, c.green, c.blue, 1.0]
 }
 
-/// Cube faces of the occupied voxels, only where they face a non-occupied voxel.
-fn voxel_mesh(map: &VoxelMap) -> (Mesh, usize) {
-    let occupied: HashSet<Key> = map.occupied().collect();
-    let (lo, hi) = occupied
-        .iter()
-        .fold((i32::MAX, i32::MIN), |(lo, hi), k| (lo.min(k.y), hi.max(k.y)));
+/// Cube faces of the occupied voxels of a chunk, only where they face a
+/// non-occupied voxel. `None` if the chunk has no occupied voxel.
+fn chunk_mesh(map: &VoxelMap, chunk: IVec3, (lo, hi): (i32, i32)) -> Option<Mesh> {
     let span = (hi - lo).max(1) as f32;
     let s = map.voxel_m();
     // Slightly smaller than the voxel: the cubes read as cubes.
@@ -221,11 +199,13 @@ fn voxel_mesh(map: &VoxelMap) -> (Mesh, usize) {
     let mut normals = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
-    for &k in &occupied {
+    let mut any = false;
+    for k in map.chunk_occupied(chunk) {
+        any = true;
         let c = map.center(k);
         let color = height_color((k.y - lo) as f32 / span);
         for (n, u, v) in faces {
-            if occupied.contains(&(k + n)) {
+            if map.is_occupied(k + n) {
                 continue;
             }
             let nf = n.as_vec3();
@@ -240,26 +220,37 @@ fn voxel_mesh(map: &VoxelMap) -> (Mesh, usize) {
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
     }
-    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_inserted_indices(Indices::U32(indices));
-    (mesh, occupied.len())
+    any.then(|| {
+        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+            .with_inserted_indices(Indices::U32(indices))
+    })
 }
 
+/// Height range (y keys) of the occupied voxels of some chunks.
+fn y_range_of(map: &VoxelMap, chunks: &[IVec3]) -> Option<(i32, i32)> {
+    chunks
+        .iter()
+        .flat_map(|&c| map.chunk_occupied(c))
+        .fold(None, |r, k| Some(r.map_or((k.y, k.y), |(lo, hi): (i32, i32)| (lo.min(k.y), hi.max(k.y)))))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn redraw(
+    mut commands: Commands,
     time: Res<Time>,
     mut timer: Local<f32>,
     mut m3: ResMut<Map3d>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut shown: Query<&mut Visibility, With<VoxelMesh>>,
+    mut shown: Query<(&mut Visibility, &Mesh3d), With<VoxelMesh>>,
     mut cams: Query<&mut RenderLayers, With<OuterCamera>>,
 ) {
-    for mut v in &mut shown {
-        let want = if m3.show { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
+    let visibility = if m3.show { Visibility::Inherited } else { Visibility::Hidden };
+    for (mut v, _) in &mut shown {
+        if *v != visibility {
+            *v = visibility;
         }
     }
     // Hiding the real world: the outside camera stops rendering layer 0.
@@ -270,15 +261,60 @@ fn redraw(
         }
     }
     *timer += time.delta_secs();
-    let revision = m3.map.revision();
-    if *timer < REDRAW_S || m3.drawn == Some(revision) || !m3.show {
+    if *timer < REDRAW_S || !m3.show {
         return;
     }
     *timer = 0.0;
-    let (mesh, n) = voxel_mesh(&m3.map);
-    m3.voxels = n;
-    m3.drawn = Some(revision);
-    let _ = meshes.insert(&m3.mesh, mesh);
+    let m3 = m3.as_mut();
+    let mut dirty = m3.map.take_dirty_chunks();
+    if dirty.is_empty() {
+        return;
+    }
+    // A wider height range recolors everything already drawn.
+    if let Some((lo, hi)) = y_range_of(&m3.map, &dirty) {
+        let range = m3.y_range.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi)));
+        if m3.y_range != Some(range) {
+            if m3.y_range.is_some() {
+                dirty.extend(m3.chunks.keys().copied());
+                dirty.sort_unstable_by_key(|c| c.to_array());
+                dirty.dedup();
+            }
+            m3.y_range = Some(range);
+        }
+    }
+    let range = m3.y_range.unwrap_or((0, CHUNK));
+    for c in dirty {
+        match (chunk_mesh(&m3.map, c, range), m3.chunks.get(&c)) {
+            (Some(mesh), Some(&e)) => {
+                if let Ok((_, h)) = shown.get(e) {
+                    let _ = meshes.insert(&h.0, mesh);
+                }
+            }
+            (Some(mesh), None) => {
+                let e = commands
+                    .spawn((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(m3.material.clone()),
+                        Transform::IDENTITY,
+                        visibility,
+                        // Outside view only: the onboard camera sees the real world.
+                        RenderLayers::layer(DRONE_LAYER),
+                        NotShadowCaster,
+                        VoxelMesh,
+                    ))
+                    .id();
+                m3.chunks.insert(c, e);
+            }
+            (None, Some(_)) => {
+                let e = m3.chunks.remove(&c).unwrap();
+                commands.entity(e).despawn();
+            }
+            (None, None) => {}
+        }
+    }
+    if m3.chunks.is_empty() {
+        m3.y_range = None;
+    }
 }
 
 /// 3D map and flight section of the side panel.
@@ -289,9 +325,10 @@ pub fn panel(ui: &mut egui::Ui, m3: &mut Map3d, ex: &mut Exploration, mission: &
             let c = m3.map.counts();
             let v = m3.map.voxel_m();
             ui.label(format!(
-                "{} occupied voxels ({:.0} cm), {:.0} m³ known free",
-                m3.voxels,
+                "{} occupied voxels ({:.0} cm, {} chunks), {:.0} m³ known free",
+                c.occupied,
                 v * 100.0,
+                m3.chunks.len(),
                 c.free as f32 * v.powi(3)
             ));
             if ui.button("Clear the 3D map").clicked() {

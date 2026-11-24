@@ -6,7 +6,7 @@
 //! Voxels live in a hash map, so the map costs memory only where something was
 //! seen. Pure Rust, no access to the ground truth.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use glam::{IVec2, IVec3, Vec3};
 use sensors::{Data, Measurement};
@@ -15,6 +15,14 @@ use crate::LogOdds;
 
 /// Voxel key: integer coordinates, voxel (0, 0, 0) spans [0, size)³.
 pub type Key = IVec3;
+
+/// Side of a chunk, in voxels: the unit of change tracking for the viewer's meshes.
+pub const CHUNK: i32 = 16;
+
+/// Chunk holding a voxel.
+pub fn chunk_of(k: Key) -> IVec3 {
+    k.div_euclid(IVec3::splat(CHUNK))
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VoxelCounts {
@@ -33,6 +41,11 @@ pub struct VoxelMap {
     seen: HashSet<IVec2>,
     /// Columns whose content changed since the last [`VoxelMap::take_dirty`].
     dirty: HashSet<IVec2>,
+    /// Chunks whose occupied voxels, or the faces they show, changed since the
+    /// last [`VoxelMap::take_dirty_chunks`].
+    dirty_chunks: HashSet<IVec3>,
+    /// Kept up to date by [`VoxelMap::add`]: reading them costs nothing.
+    counts: VoxelCounts,
     /// Bumped at each change of an occupied voxel's state: the viewer redraws
     /// only when it moves.
     revision: u64,
@@ -47,10 +60,12 @@ impl VoxelMap {
         Self {
             voxel_m,
             params: LogOdds::default(),
-            cells: HashMap::new(),
-            columns: HashMap::new(),
-            dirty: HashSet::new(),
-            seen: HashSet::new(),
+            cells: HashMap::default(),
+            columns: HashMap::default(),
+            dirty: HashSet::default(),
+            dirty_chunks: HashSet::default(),
+            counts: VoxelCounts::default(),
+            seen: HashSet::default(),
             revision: 0,
             max_free_m: 15.0,
         }
@@ -67,9 +82,12 @@ impl VoxelMap {
     pub fn clear(&mut self) {
         self.dirty.extend(self.columns.keys().copied());
         self.dirty.extend(self.cells.keys().map(|k| IVec2::new(k.x, k.z)));
+        let t = self.params.occupied_above;
+        self.dirty_chunks.extend(self.cells.iter().filter(|(_, l)| **l > t).map(|(k, _)| chunk_of(*k)));
         self.cells.clear();
         self.columns.clear();
         self.seen.clear();
+        self.counts = VoxelCounts::default();
         self.revision += 1;
     }
 
@@ -100,13 +118,7 @@ impl VoxelMap {
     }
 
     pub fn counts(&self) -> VoxelCounts {
-        let p = self.params;
-        let mut c = VoxelCounts::default();
-        for &l in self.cells.values() {
-            c.occupied += (l > p.occupied_above) as usize;
-            c.free += (l < p.free_below) as usize;
-        }
-        c
+        self.counts
     }
 
     fn add(&mut self, k: Key, delta: f32) {
@@ -118,11 +130,16 @@ impl VoxelMap {
         }
         let l = self.cells.entry(k).or_insert(0.0);
         let was = *l > p.occupied_above;
+        let was_free = *l < p.free_below;
         *l = (*l + delta).clamp(p.min, p.max);
         let now = *l > p.occupied_above;
+        let now_free = *l < p.free_below;
+        self.counts.occupied = self.counts.occupied + now as usize - was as usize;
+        self.counts.free = self.counts.free + now_free as usize - was_free as usize;
         if was != now {
             self.revision += 1;
             self.dirty.insert(col);
+            self.mark_chunks(k);
             let ys = self.columns.entry(col).or_default();
             match ys.binary_search(&k.y) {
                 Err(at) if now => ys.insert(at, k.y),
@@ -132,6 +149,41 @@ impl VoxelMap {
                 _ => {}
             }
         }
+    }
+
+    /// Marks the chunk of `k` dirty, and the neighbor chunks whose faces it hides or
+    /// uncovers (when `k` lies on a chunk border).
+    fn mark_chunks(&mut self, k: Key) {
+        let c = chunk_of(k);
+        self.dirty_chunks.insert(c);
+        let local = k - c * CHUNK;
+        for axis in 0..3 {
+            let mut step = IVec3::ZERO;
+            if local[axis] == 0 {
+                step[axis] = -1;
+            } else if local[axis] == CHUNK - 1 {
+                step[axis] = 1;
+            } else {
+                continue;
+            }
+            self.dirty_chunks.insert(c + step);
+        }
+    }
+
+    /// Occupied voxels of a chunk, column by column.
+    pub fn chunk_occupied(&self, chunk: IVec3) -> impl Iterator<Item = Key> + '_ {
+        let o = chunk * CHUNK;
+        (0..CHUNK).flat_map(move |dx| (0..CHUNK).map(move |dz| IVec2::new(o.x + dx, o.z + dz))).flat_map(move |c| {
+            let ys = self.column(c);
+            let lo = ys.partition_point(|&y| y < o.y);
+            let hi = ys.partition_point(|&y| y < o.y + CHUNK);
+            ys[lo..hi].iter().map(move |&y| IVec3::new(c.x, y, c.y))
+        })
+    }
+
+    /// Chunks changed since the last call.
+    pub fn take_dirty_chunks(&mut self) -> Vec<IVec3> {
+        self.dirty_chunks.drain().collect()
     }
 
     /// Column key of the point (x, z).
@@ -180,22 +232,39 @@ impl VoxelMap {
     /// Integrates a range measurement (lidar, depth image). Other measurements
     /// (sonar, navigation) are ignored: a sonar does not say where in its cone
     /// the echo comes from.
+    ///
+    /// The voxels each ray crosses are computed in parallel, then applied in the
+    /// order of the rays: the same map as one ray after the other.
     pub fn integrate(&mut self, m: &Measurement) {
         let (beams, max_range) = match &m.data {
             Data::Scan { beams, max_range } | Data::DepthImage { beams, max_range, .. } => (beams, *max_range),
             _ => return,
         };
-        for b in beams {
-            if !b.valid {
-                continue;
-            }
+        let reach = max_range.min(self.max_free_m);
+        let ray = |b: &sensors::Beam| {
             let dir = m.rotation * b.dir;
-            match b.range {
-                Some(d) => self.insert_ray(m.origin, m.origin + dir * d, true),
-                None => {
-                    let reach = max_range.min(self.max_free_m);
-                    self.insert_ray(m.origin, m.origin + dir * reach, false);
-                }
+            let (end, hit) = match b.range {
+                Some(d) => (m.origin + dir * d, true),
+                None => (m.origin + dir * reach, false),
+            };
+            let mut keys = Vec::new();
+            let end_key = self.ray_keys(m.origin, end, hit, &mut keys);
+            (keys, end_key)
+        };
+        #[cfg(feature = "parallel")]
+        let rays: Vec<_> = {
+            use rayon::prelude::*;
+            beams.par_iter().with_min_len(64).filter(|b| b.valid).map(ray).collect()
+        };
+        #[cfg(not(feature = "parallel"))]
+        let rays: Vec<_> = beams.iter().filter(|b| b.valid).map(ray).collect();
+        let (miss, hit) = (self.params.miss, self.params.hit);
+        for (keys, end_key) in rays {
+            for k in keys {
+                self.add(k, miss);
+            }
+            if let Some(k) = end_key {
+                self.add(k, hit);
             }
         }
     }
@@ -203,6 +272,18 @@ impl VoxelMap {
     /// One ray from `origin` to `end`: frees the voxels crossed before `end`,
     /// and marks `end`'s voxel occupied if `hit`.
     pub fn insert_ray(&mut self, origin: Vec3, end: Vec3, hit: bool) {
+        let mut keys = Vec::new();
+        let end_key = self.ray_keys(origin, end, hit, &mut keys);
+        for k in keys {
+            self.add(k, self.params.miss);
+        }
+        if let Some(k) = end_key {
+            self.add(k, self.params.hit);
+        }
+    }
+
+    /// Voxels a ray frees (pushed to `free`), and the one it marks occupied.
+    fn ray_keys(&self, origin: Vec3, end: Vec3, hit: bool, free: &mut Vec<Key>) -> Option<Key> {
         let end_key = self.key(end);
         let length = origin.distance(end);
         // Free space stops a little before the hit: noise must not erase the
@@ -210,20 +291,13 @@ impl VoxelMap {
         let free_len = if hit { (length - 0.5 * self.voxel_m).max(0.0) } else { length.min(self.max_free_m) };
         if free_len > 0.0 {
             let dir = (end - origin) / length.max(1e-6);
-            let miss = self.params.miss;
-            let mut keys = Vec::new();
             self.traverse(origin, dir, free_len, |k| {
                 if k != end_key || !hit {
-                    keys.push(k);
+                    free.push(k);
                 }
             });
-            for k in keys {
-                self.add(k, miss);
-            }
         }
-        if hit {
-            self.add(end_key, self.params.hit);
-        }
+        hit.then_some(end_key)
     }
 
     /// Visits the voxels crossed by the segment `origin + t·dir`, `0 <= t <= len`.
@@ -398,5 +472,33 @@ mod tests {
             (1.0..3.5).contains(&c.y) && (c.x.abs() - 4.0).abs() < 0.5 && c.z.abs() < 3.0
         });
         assert!(walls.count() > 20);
+    }
+
+    #[test]
+    fn chunks_track_occupied_changes() {
+        let mut map = VoxelMap::new(1.0);
+        map.take_dirty_chunks();
+        // Inside a chunk: only that chunk is dirty.
+        map.insert_ray(Vec3::new(5.5, 5.5, 0.5), Vec3::new(5.5, 5.5, 5.5), true);
+        map.insert_ray(Vec3::new(5.5, 5.5, 0.5), Vec3::new(5.5, 5.5, 5.5), true);
+        assert!(map.is_occupied(IVec3::new(5, 5, 5)));
+        assert_eq!(map.take_dirty_chunks(), vec![IVec3::ZERO]);
+        assert_eq!(map.chunk_occupied(IVec3::ZERO).collect::<Vec<_>>(), vec![IVec3::new(5, 5, 5)]);
+        // Repeated hits that do not change the state dirty nothing.
+        map.insert_ray(Vec3::new(5.5, 5.5, 0.5), Vec3::new(5.5, 5.5, 5.5), true);
+        assert!(map.take_dirty_chunks().is_empty());
+        // On a chunk border: the neighbor's faces change too.
+        for _ in 0..2 {
+            map.insert_ray(Vec3::new(5.5, 5.5, 20.5), Vec3::new(5.5, 5.5, 16.5), true);
+        }
+        let mut d = map.take_dirty_chunks();
+        d.sort_by_key(|c| c.z);
+        assert_eq!(d, vec![IVec3::ZERO, IVec3::Z]);
+        assert!(map.chunk_occupied(IVec3::NEG_ONE).next().is_none());
+        // Clearing dirties every chunk that had something.
+        map.clear();
+        let mut d = map.take_dirty_chunks();
+        d.sort_by_key(|c| c.z);
+        assert_eq!(d, vec![IVec3::ZERO, IVec3::Z]);
     }
 }

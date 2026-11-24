@@ -2,7 +2,7 @@ use drone_spec::Mount;
 use glam::{Quat, Vec3};
 use world::{World, rng::SplitMix64};
 
-use crate::{Beam, Data, Noise, Pose, Sensor};
+use crate::{Data, Noise, Pose, Sensor};
 
 const MIN_RANGE: f32 = 0.2;
 
@@ -75,14 +75,7 @@ impl Sensor for DepthCamera {
     }
 
     fn measure(&mut self, world: &World, _body: &Pose, origin: Vec3, rotation: Quat) -> Data {
-        let beams = self
-            .dirs
-            .iter()
-            .map(|&dir| {
-                let hit = world.raycast(origin, rotation * dir, self.range).map(|h| h.distance);
-                Beam::measured(dir, hit, MIN_RANGE, self.range, &self.noise, &mut self.rng)
-            })
-            .collect();
+        let beams = crate::cast_beams(world, origin, rotation, &self.dirs, (MIN_RANGE, self.range), &self.noise, &mut self.rng);
         Data::DepthImage {
             width: self.width,
             height: self.height,
