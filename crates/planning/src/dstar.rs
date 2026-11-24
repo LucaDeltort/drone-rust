@@ -252,7 +252,7 @@ impl DStarLite {
         }
         let mut u = self.start;
         let mut out = vec![self.xy(u)];
-        let mut seen = std::collections::HashSet::from([u]);
+        let mut seen = rustc_hash::FxHashSet::from_iter([u]);
         while u != self.goal {
             let (v, c) = self
                 .edges(u)

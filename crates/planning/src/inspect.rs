@@ -14,7 +14,8 @@
 //!   inside something (a tree on the ring) is skipped, and so is one it cannot
 //!   reach for `stuck_s`.
 
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::VecDeque;
 
 use drone_spec::Airframe;
 use glam::{IVec2, Vec2, Vec3};
@@ -77,7 +78,7 @@ pub fn detect_target(voxels: &VoxelMap, p: Vec2, search_m: f32) -> Option<Target
     let mid = |c: IVec2| (c.as_vec2() + 0.5) * v;
     let c0 = voxels.column_key(p.x, p.y);
     let n = (SEED_M / v).ceil() as i32;
-    let mut seen: HashSet<IVec2> = HashSet::new();
+    let mut seen: HashSet<IVec2> = HashSet::default();
     let mut queue: VecDeque<IVec2> = (-n..=n)
         .flat_map(|dz| (-n..=n).map(move |dx| c0 + IVec2::new(dx, dz)))
         .filter(|&c| mid(c).distance(p) <= SEED_M && stands_out(voxels, c))
