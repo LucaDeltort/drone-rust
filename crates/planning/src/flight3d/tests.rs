@@ -36,7 +36,8 @@ fn fly(world: &World, goal: Vec2, limit_s: f32) -> Outcome {
     let mut t = 0.0_f32;
     while t < limit_s && nav.status != NavStatus::Reached {
         let cmd = nav.update(&grid, &state, &af, DT);
-        let cmd = flight.guard(&voxels, &state, &af, cmd, DT);
+        let cmd = flight.guard(&voxels, &state, &af, cmd, DT, None);
+
         let before = state.position;
         state.step(cmd, &af, world, DT);
         distance_m += Vec2::new(before.x - state.position.x, before.z - state.position.z).length();

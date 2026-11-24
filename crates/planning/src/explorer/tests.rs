@@ -13,24 +13,32 @@ struct Outcome {
     /// Share of the really empty area (slab) that the map knows as free.
     coverage: f32,
     distance_m: f32,
+    /// Farthest horizontal distance from the take-off point, in m.
+    farthest: f32,
 }
 
 fn run(world: &World, spec: &DroneSpec, strategy: Strategy, limit_s: f32) -> Outcome {
+    run_with(world, spec, ExplorerConfig::new(strategy, &spec.airframe), limit_s)
+}
+
+fn run_with(world: &World, spec: &DroneSpec, cfg: ExplorerConfig, limit_s: f32) -> Outcome {
     const DT: f32 = 0.01;
     let mut state = DroneState::spawn(world, 0.0, 0.0, 2.0);
     let y = state.position.y;
     let mut grid = OccupancyGrid::new(world.terrain.half_size() * 2.0, 0.25, y - 0.5, y + 0.5);
     grid.mark_free_disk(Vec2::new(0.0, 0.0), 1.0);
     let mut suite = SensorSuite::new(&spec.sensors, 1);
-    let mut explorer = Explorer::new(ExplorerConfig::new(strategy, &spec.airframe), y);
+    let mut explorer = Explorer::new(cfg, y);
     let mut last_t = vec![f64::NEG_INFINITY; spec.sensors.len()];
     let (mut collisions, mut touching, mut distance_m) = (0, false, 0.0);
+    let mut farthest = 0.0_f32;
     let mut t = 0.0_f32;
     while t < limit_s && explorer.status == Status::Exploring {
         let cmd = explorer.update(&grid, &state, &spec.airframe, DT);
         let before = state.position;
         state.step(cmd, &spec.airframe, world, DT);
         distance_m += before.distance(state.position);
+        farthest = farthest.max(Vec2::new(state.position.x, state.position.z).length());
         let hit = state.flight.contact;
         // `EXPLORE_TRACE=N`: trace every N hundredths of a second, and at each collision.
         if std::env::var_os("EXPLORE_TRACE").is_some() && ((t * 100.0).round() as i32 % std::env::var("EXPLORE_TRACE").ok().and_then(|v| v.parse().ok()).unwrap_or(50) == 0 || hit && !touching || explorer.status != Status::Exploring) {
@@ -70,6 +78,7 @@ fn run(world: &World, spec: &DroneSpec, strategy: Strategy, limit_s: f32) -> Out
         collisions,
         coverage: known as f32 / empty as f32,
         distance_m,
+        farthest,
     }
 }
 
@@ -101,6 +110,22 @@ fn scout_explores_the_corridor_nearest_frontier() {
 fn scout_explores_the_corridor_information_gain() {
     let o = run(&corridor(), &DroneSpec::scout(), Strategy::InfoGain, 600.0);
     check("corridor, info gain", &o, 0.95);
+}
+
+/// Restricted to a 10 m disk around the take-off point: the explorer stops
+/// once the disk is mapped, instead of going down the whole corridor.
+#[test]
+fn zone_limits_the_exploration() {
+    let spec = DroneSpec::scout();
+    let mut cfg = ExplorerConfig::new(Strategy::Nearest, &spec.airframe);
+    cfg.zone = Some(crate::Zone { center: Vec2::ZERO, radius: 10.0 });
+    let o = run_with(&corridor(), &spec, cfg, 300.0);
+    println!("zone of 10 m: {:?} in {:.0} s, farthest {:.1} m", o.status, o.seconds, o.farthest);
+    assert_eq!(o.status, Status::Done);
+    assert_eq!(o.collisions, 0);
+    assert!(o.farthest < 12.0, "left the zone: {} m", o.farthest);
+    let full = run(&corridor(), &spec, Strategy::Nearest, 600.0);
+    assert!(o.seconds < full.seconds / 2.0);
 }
 
 #[test]

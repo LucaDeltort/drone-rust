@@ -102,16 +102,44 @@ fn contact_with(o: &Obstacle, p: Vec3, r: f32) -> Option<Contact> {
             Some(Contact { normal: n, depth: r + gap })
         }
         ObstacleShape::Roof { size } => {
-            // Largest signed distance to the faces: exact on a face, conservative at
-            // an edge (the sphere is pushed out a hair early).
             let local = rot.inverse() * (p - o.base);
+            let closest = roof_closest(size, local);
+            let d = local.distance(closest);
+            if d >= r {
+                return None;
+            }
+            if d > 1e-6 {
+                return Some(Contact { normal: rot * ((local - closest) / d), depth: r - d });
+            }
+            // Center inside: out through the nearest face.
             let (n, s) = crate::raycast::roof_planes(size)
                 .iter()
                 .map(|&(n, d)| (n, n.dot(local) - d))
                 .max_by(|a, b| a.1.total_cmp(&b.1))?;
-            (s < r).then(|| Contact { normal: rot * n, depth: r - s })
+            Some(Contact { normal: rot * n, depth: r - s })
         }
     }
+}
+
+/// Closest point of a gable roof (its frame, base center at the origin) to `p`:
+/// a triangular cross-section (z, y) extruded along x. `p` itself if inside.
+fn roof_closest(size: Vec3, p: Vec3) -> Vec3 {
+    let (hx, h, hz) = (size.x / 2.0, size.y, size.z / 2.0);
+    let x = p.x.clamp(-hx, hx);
+    let q = glam::Vec2::new(p.z, p.y);
+    let (a, b, c) = (glam::Vec2::new(-hz, 0.0), glam::Vec2::new(hz, 0.0), glam::Vec2::new(0.0, h));
+    // Inside the triangle: above the base, under both slopes.
+    let inside = q.y >= 0.0 && q.y <= h * (1.0 - q.x.abs() / hz);
+    let on = if inside {
+        q
+    } else {
+        let seg = |u: glam::Vec2, v: glam::Vec2| {
+            let t = ((q - u).dot(v - u) / (v - u).length_squared()).clamp(0.0, 1.0);
+            u + (v - u) * t
+        };
+        [seg(a, b), seg(b, c), seg(c, a)].into_iter().min_by(|m, n| m.distance(q).total_cmp(&n.distance(q))).unwrap()
+    };
+    Vec3::new(x, on.y, on.x)
 }
 
 /// Distance from a point to an obstacle (0 inside).
@@ -119,11 +147,7 @@ fn distance_to(o: &Obstacle, p: Vec3) -> f32 {
     match o.shape {
         ObstacleShape::Roof { size } => {
             let local = Quat::from_rotation_y(o.yaw).inverse() * (p - o.base);
-            crate::raycast::roof_planes(size)
-                .iter()
-                .map(|&(n, d)| n.dot(local) - d)
-                .fold(f32::NEG_INFINITY, f32::max)
-                .max(0.0)
+            local.distance(roof_closest(size, local))
         }
         ObstacleShape::Box { size } => {
             let center = o.base + Vec3::Y * (size.y / 2.0);
@@ -207,5 +231,29 @@ mod tests {
         assert!(!w.collides(Vec3::new(-8.7, 1.5, 0.0), 0.25));
         assert!(w.collides(Vec3::new(-10.0, 3.2, 0.0), 0.25));
         assert!(!w.collides(Vec3::new(-10.0, 3.3, 0.0), 0.25));
+    }
+
+    #[test]
+    fn roof_eave_is_exact() {
+        let w = World::build(&WorldSpec {
+            size_m: 100.0,
+            cell_m: 1.0,
+            terrain: TerrainSpec::Flat { height: 0.0 },
+            obstacles: ObstaclesSpec::List(vec![ObstacleSpec {
+                shape: ObstacleShape::Roof { size: Vec3::new(10.0, 3.0, 6.0) },
+                x: 0.0,
+                z: 0.0,
+                yaw_deg: 0.0,
+                elevation_m: 5.0,
+            }]),
+            wind: Default::default(),
+        })
+        .unwrap();
+        // Eave at z = 3, y = 5: 0.6 m outside it, just below, nothing touches.
+        assert!(!w.collides(Vec3::new(0.0, 4.9, 3.6), 0.3));
+        assert!(w.contact(Vec3::new(0.0, 4.9, 3.6), 0.3).is_none());
+        // On the slope and under the eave, it does.
+        assert!(w.collides(Vec3::new(0.0, 6.6, 1.0), 0.3));
+        assert!(w.collides(Vec3::new(0.0, 4.8, 2.0), 0.3));
     }
 }

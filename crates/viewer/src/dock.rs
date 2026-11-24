@@ -18,6 +18,7 @@ use crate::{
     CurrentWorld, OuterCamera,
     drone::{DroneConfig, FPV_ASPECT, FpvCamera, FpvFov, SimDrone},
     explore::{self, Exploration},
+    inspect::{self, Inspection},
     map3d::{self, Map3d},
     mapview::{self, Map, MapOverlay, MapSettings},
     mission::{self, Mission},
@@ -91,7 +92,13 @@ fn layout(
     mut dock: ResMut<Dock>,
     hud: Res<HudText>,
     config: Res<DroneConfig>,
-    (mut ex, mut mission, mut map, mut est): (ResMut<Exploration>, ResMut<Mission>, ResMut<Map>, ResMut<Estimator>),
+    (mut ex, mut mission, mut map, mut est, mut insp): (
+        ResMut<Exploration>,
+        ResMut<Mission>,
+        ResMut<Map>,
+        ResMut<Estimator>,
+        ResMut<Inspection>,
+    ),
     (mut world, mut streaks, mut m3): (ResMut<CurrentWorld>, ResMut<Streaks>, ResMut<Map3d>),
     (mut view, mut fov, mut suites): (ResMut<DebugView>, ResMut<FpvFov>, Query<&mut Suite>),
     (mut settings, mut overlays, drones): (
@@ -119,6 +126,8 @@ fn layout(
 
     egui::Panel::left("left_panel").resizable(true).default_size(LEFT_W).show(&mut root, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let three_d = m3.three_d;
+            section(ui, "Inspection", true, |ui| inspect::panel(ui, &mut insp, &mut ex, &mut mission, three_d));
             section(ui, "Mission A -> B", true, |ui| mission::panel(ui, &mut mission, &mut ex, &map, &config));
             section(ui, "Exploration", true, |ui| explore::panel(ui, &mut ex, &mut mission, &map, &config));
             section(ui, "3D map & flight", true, |ui| map3d::panel(ui, &mut m3, &mut ex, &mut mission));

@@ -20,6 +20,7 @@ mod drone;
 mod map3d;
 mod wind;
 mod explore;
+mod inspect;
 mod scene;
 mod mapview;
 mod mission;
@@ -165,7 +166,7 @@ fn main() {
         })
         .add_plugins((DronePlugin, sensing::SensingPlugin, mapview::MapPlugin, explore::ExplorePlugin, mission::MissionPlugin))
         .add_plugins(pose::PosePlugin(args.pose))
-        .add_plugins((map3d::Map3dPlugin, wind::WindPlugin, dock::DockPlugin))
+        .add_plugins((map3d::Map3dPlugin, wind::WindPlugin, dock::DockPlugin, inspect::InspectPlugin))
         .insert_resource(args.source)
         .insert_resource(CurrentWorld(world))
         .insert_resource(FpvFov(args.drone.camera.fov_deg))
@@ -279,11 +280,11 @@ fn hud(
     let controls = match *mode {
         ControlMode::Pilot => {
             "PILOT (Tab: free camera) · W/S forward/backward · A/D left/right · Space/Shift up/down · Q/E yaw · \
-             X explore · B place B · G go to B · M 3D map · V real world · [ ] FOV"
+             X explore · B place B · G go to B · T target · I inspect · M 3D map · V real world · [ ] FOV"
         }
         ControlMode::FreeCamera => {
             "FREE CAMERA (Tab: pilot) · right click + mouse · WASD · Q/E · Shift · wheel · \
-             X explore · B place B · G go to B · M 3D map · V real world"
+             X explore · B place B · G go to B · T target · I inspect · M 3D map · V real world"
         }
     };
     let (pitch, roll) = s.tilt();

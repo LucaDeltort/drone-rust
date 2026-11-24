@@ -46,6 +46,9 @@ pub struct ExplorerConfig {
     pub waypoint_radius_m: f32,
     /// Without progress for this long, the target is abandoned, in s.
     pub stuck_s: f32,
+    /// Only explore this area: frontiers outside are ignored, and the
+    /// exploration is done when the area is.
+    pub zone: Option<crate::Zone>,
 }
 
 impl ExplorerConfig {
@@ -61,6 +64,7 @@ impl ExplorerConfig {
             replan_s: 0.5,
             waypoint_radius_m: 0.3,
             stuck_s: 6.0,
+            zone: None,
         }
     }
 }
@@ -175,7 +179,19 @@ impl Explorer {
         };
         let cspace = CSpace::build(grid, self.cfg.inflate_m, self.cfg.unknown_margin_m);
         let field = DistanceField::from(&cspace, grid.cell_m(), start);
-        let frontiers = frontier::detect(grid, self.cfg.min_frontier_cells, &self.exhausted);
+        let mut frontiers = frontier::detect(grid, self.cfg.min_frontier_cells, &self.exhausted);
+        if let Some(zone) = self.cfg.zone {
+            // Keep only the frontier cells inside the area.
+            frontiers.retain_mut(|f| {
+                f.cells.retain(|&(i, j)| zone.contains(grid.center(i, j)));
+                if f.cells.len() < self.cfg.min_frontier_cells {
+                    return false;
+                }
+                let sum: Vec2 = f.cells.iter().map(|&(i, j)| grid.center(i, j)).sum();
+                f.centroid = sum / f.cells.len() as f32;
+                true
+            });
+        }
         self.last_frontier_cells = frontiers.iter().flat_map(|f| f.cells.iter().copied()).collect();
         self.cell_m = grid.cell_m();
         self.grid_origin = grid.center(0, 0) - grid.cell_m() * 0.5;

@@ -28,6 +28,8 @@ pub struct Exploration {
     touching: bool,
     /// Distance kept from obstacles, beyond the drone's radius, in m.
     pub clearance_m: f32,
+    /// Only explore this area (around the inspection target).
+    pub zone: Option<planning::Zone>,
 }
 
 impl Exploration {
@@ -53,6 +55,7 @@ impl Plugin for ExplorePlugin {
             collisions: 0,
             touching: false,
             clearance_m: DEFAULT_CLEARANCE_M,
+            zone: None,
         })
         .add_systems(FixedUpdate, (explore.before(step_drone), count_collisions.after(step_drone)))
         .add_systems(Update, (toggle_key, reset_on_rebuild, draw_plan))
@@ -67,6 +70,7 @@ fn start(ex: &mut Exploration, mission: &mut Mission, map: &Map, config: &DroneC
     cfg.lambda = ex.lambda;
     cfg.inflate_m = config.0.airframe.radius + ex.clearance_m;
     cfg.unknown_margin_m = cfg.inflate_m;
+    cfg.zone = ex.zone;
     let altitude = (map.grid.y_lo + map.grid.y_hi) / 2.0;
     ex.explorer = Some(Explorer::new(cfg, altitude));
     ex.elapsed = 0.0;

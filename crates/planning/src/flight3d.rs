@@ -47,6 +47,9 @@ pub struct Flight3d {
     pub target: Option<f32>,
 }
 
+/// Lowest height above the ground for an altitude asked by the mission, in m.
+pub const MIN_AGL_M: f32 = 1.5;
+
 /// Extra radius searched for the ground, in m.
 const GROUND_SEARCH_M: f32 = 4.0;
 
@@ -201,10 +204,77 @@ impl Flight3d {
         out
     }
 
+    /// Highest ground under the drone's body (lowest voxel of each nearby column).
+    fn ground_below(&self, voxels: &VoxelMap, state: &DroneState, airframe: &Airframe) -> Option<f32> {
+        let v = voxels.voxel_m();
+        let pos = Vec2::new(state.position.x, state.position.z);
+        let c0 = voxels.column_key(pos.x, pos.y);
+        let r = airframe.radius + self.cfg.clearance_h_m;
+        let n = (r / v).ceil() as i32;
+        (-n..=n)
+            .flat_map(|dz| (-n..=n).map(move |dx| c0 + IVec2::new(dx, dz)))
+            .filter(|c| ((c.as_vec2() + 0.5) * v).distance(pos) <= r + 0.71 * v)
+            .filter_map(|c| voxels.column_floor(c))
+            .reduce(f32::max)
+    }
+
+    /// Clamps an altitude into the free vertical gap around the drone's body.
+    fn clamp_to_gap(&self, voxels: &VoxelMap, state: &DroneState, airframe: &Airframe, target: f32) -> f32 {
+        let v = voxels.voxel_m();
+        let pos = Vec2::new(state.position.x, state.position.z);
+        let y = state.position.y;
+        let r = airframe.radius + 0.2;
+        let c0 = voxels.column_key(pos.x, pos.y);
+        let n = (r / v).ceil() as i32;
+        let (mut below, mut above) = (f32::NEG_INFINITY, f32::INFINITY);
+        for dz in -n..=n {
+            for dx in -n..=n {
+                let c = c0 + IVec2::new(dx, dz);
+                if ((c.as_vec2() + 0.5) * v).distance(pos) > r + 0.71 * v {
+                    continue;
+                }
+                for &k in voxels.column(c) {
+                    let (bottom, top) = (k as f32 * v, (k + 1) as f32 * v);
+                    if top <= y {
+                        below = below.max(top);
+                    } else if bottom >= y {
+                        above = above.min(bottom);
+                    }
+                }
+            }
+        }
+        let margin = airframe.radius + VERTICAL_MARGIN_M;
+        let (lo, hi) = (below + margin, above - margin);
+        if lo <= hi { target.clamp(lo, hi) } else { y }
+    }
+
     /// Takes the planner's command and makes it 3D: altitude from the surfaces
     /// ahead, horizontal speed capped by what stands at the current height.
-    pub fn guard(&mut self, voxels: &VoxelMap, state: &DroneState, airframe: &Airframe, cmd: Command, dt: f32) -> Command {
-        let target = self.altitude_target(voxels, state, airframe, dt);
+    ///
+    /// `wanted`: an altitude the mission asks for (an inspection level). It then
+    /// replaces the surfaces rule, never closer than `MIN_AGL_M` to the ground;
+    /// what stands at that height is left to the horizontal guard.
+    pub fn guard(
+        &mut self,
+        voxels: &VoxelMap,
+        state: &DroneState,
+        airframe: &Airframe,
+        cmd: Command,
+        dt: f32,
+        wanted: Option<f32>,
+    ) -> Command {
+        let target = match wanted {
+            Some(w) => {
+                let floor = self.ground_below(voxels, state, airframe).map_or(w, |g| g + MIN_AGL_M);
+                let t = w.max(floor);
+                self.target = Some(t);
+                t
+            }
+            None => self.altitude_target(voxels, state, airframe, dt),
+        };
+        // Never climb or descend into what is right above or below the body (a
+        // canopy, a porch roof): stay in the free gap until clear of it.
+        let target = self.clamp_to_gap(voxels, state, airframe, target);
         let up = control::hold_altitude(target, state, airframe);
         let fwd = state.forward();
         let right = Vec3::new(-fwd.z, 0.0, fwd.x);

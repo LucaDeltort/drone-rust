@@ -35,6 +35,10 @@ cargo run --release -p viewer -- --map maps/house.ron
 ```
 
 Press `X`, then `V` to hide the real world and see only the voxel map the drone built.
+
+To inspect only the house instead of the whole map: point at it, press `T` to set the
+target, then `I`. The drone flies to it, circles it at several heights facing it,
+sweeps over its roof, and comes back.
 With a 3D lidar the drone flies in 3D: it follows the relief, climbs over the house,
 fences and cars, and only goes around what is too tall.
 
@@ -57,14 +61,15 @@ You can combine options. Bevy is slow in debug builds, so use `--release` in cit
 | General | `Tab` pilot ↔ free camera · `[` `]` onboard camera FOV · `N`/`P` next/previous seed (seed mode) · `R` reload the map (file mode) |
 | Manual piloting | `W`/`S` forward/backward · `A`/`D` left/right · `Space`/`Shift` up/down · `Q`/`E` yaw |
 | Free camera | right click + mouse, `WASD`, `Q`/`E`, `Shift`, wheel |
-| Missions | `X` exploration · `B` place B under the cursor · `G` go to B (start/stop) · `O` drop a wall in front of the drone |
+| Missions | `X` exploration · `B` place B under the cursor · `G` go to B (start/stop) · `O` drop a wall in front of the drone · `T` inspection target under the cursor · `I` inspect (start/stop) |
 | 3D map | `M` show/hide the voxel map · `V` show/hide the real world |
 
 ### Layout
 
 Blender style: the 3D view in the middle, the settings docked around it, never over it.
 
-- **Left panel**: Mission A -> B, Exploration, 3D map & flight, Wind, Pose.
+- **Left panel**: Inspection (target, status, structure size, exploration limited to a
+  radius around the target), Mission A -> B, Exploration, 3D map & flight, Wind, Pose.
 - **Right panel**: onboard view (the camera is fixed to the airframe, so the horizon
   tilts when the drone does), Map (top-down occupancy grid and its consistency with the
   terrain), Sensors (latest measurements, noise controls).
@@ -276,6 +281,18 @@ The project is a Cargo workspace with one crate per layer:
   - Obstacles push the drone back out and absorb most of the impact.
   - The 2D and 3D lidars sit on a stabilized mount (heading only), so the slab map
     stays horizontal; the onboard camera tilts with the airframe.
+- **Inspection of one structure** (needs 3D flight).
+  - From the target point, the structure is found in the drone's own 3D map: the
+    voxel columns standing more than 1 m out of the local ground, connected to the
+    point. Its footprint grows as the drone discovers its far side, and the plan
+    follows.
+  - Plan: a ring 4 m around the footprint near the ground, another at mid-height
+    for a tall structure, then two passes 3 m over the roof. The drone faces the
+    structure all along.
+  - A waypoint inside something (a tree on the ring) is moved outwards, or skipped;
+    climbs and descents stay in the free gap above and below the body.
+- **Exploration of an area.** The explorer can be limited to a disk: frontiers
+  outside are ignored, and it is done when the disk is.
 - **Safe speed accounts for the response time.** The stopping distance includes the
   0.2 s the airframe needs before it decelerates, and the look-ahead covers a full stop
   from top speed.
@@ -345,7 +362,11 @@ There are about a hundred tests, for example:
 - a 3D lidar circling a house maps its walls and roof, with no voxel in the air;
 - the Mapper flies around the house, in its gusty wind, without touching anything;
 - 3D flight: over a low wall, around a 25 m one, along a hill, over the house roof,
-  never closer than 1.5 m to the ground.
+  never closer than 1.5 m to the ground;
+- inspection: the house is found with its real size, all four walls and the roof are
+  mapped, the far building is never approached, and the drone comes back home; on
+  the house map, in the wind, with no contact;
+- an exploration limited to 10 m stops there.
 
 ## Known limitations
 

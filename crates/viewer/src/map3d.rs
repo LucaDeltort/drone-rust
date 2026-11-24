@@ -38,7 +38,7 @@ const REDRAW_S: f32 = 0.5;
 
 #[derive(Resource)]
 pub struct Map3d {
-    map: VoxelMap,
+    pub map: VoxelMap,
     last_t: Vec<f64>,
     drawn: Option<u64>,
     mesh: Handle<Mesh>,
@@ -47,7 +47,7 @@ pub struct Map3d {
     voxels: usize,
     mode: Option<sim::PoseMode>,
     /// 3D flight: climb over what can be flown over.
-    three_d: bool,
+    pub three_d: bool,
     flight: Flight3d,
 }
 
@@ -59,7 +59,7 @@ pub struct Map3dPlugin;
 impl Plugin for Map3dPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup)
-            .add_systems(FixedUpdate, (integrate.after(estimate), guard.after(explore).after(navigate).before(step_drone)))
+            .add_systems(FixedUpdate, (integrate.after(estimate), guard.after(explore).after(navigate).after(crate::inspect::InspectSet).before(step_drone)))
             .add_systems(Update, (reset_on_rebuild, keys, redraw).chain())
 ;
     }
@@ -157,6 +157,7 @@ fn integrate(mut m3: ResMut<Map3d>, mut map: ResMut<Map>, est: Res<Estimator>, s
 
 /// In 3D flight, during a mission, the planner's command gets its altitude and
 /// its horizontal speed limit from the 3D map.
+#[allow(clippy::too_many_arguments)]
 fn guard(
     time: Res<Time>,
     mut m3: ResMut<Map3d>,
@@ -164,14 +165,15 @@ fn guard(
     config: Res<DroneConfig>,
     ex: Res<Exploration>,
     mission: Res<Mission>,
+    insp: Res<crate::inspect::Inspection>,
     mut cmd: ResMut<PilotCommand>,
 ) {
     let m3 = m3.as_mut();
-    if !m3.three_d || !(ex.active() || mission.active()) {
+    if !m3.three_d || !(ex.active() || mission.active() || insp.inspector.is_some()) {
         m3.flight.target = None;
         return;
     }
-    cmd.0 = m3.flight.guard(&m3.map, &est.belief, &config.0.airframe, cmd.0, time.delta_secs());
+    cmd.0 = m3.flight.guard(&m3.map, &est.belief, &config.0.airframe, cmd.0, time.delta_secs(), insp.wanted);
 }
 
 fn reset_on_rebuild(mut rebuilt: MessageReader<WorldRebuilt>, mut m3: ResMut<Map3d>) {
