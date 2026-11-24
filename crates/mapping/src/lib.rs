@@ -16,7 +16,7 @@ use sensors::{Data, Measurement};
 mod matching;
 mod voxel;
 pub use matching::{MatchConfig, ScanMatch};
-pub use voxel::{Key, VoxelCounts, VoxelMap};
+pub use voxel::{CHUNK, Key, VoxelCounts, VoxelMap, chunk_of};
 
 /// Readable state of a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

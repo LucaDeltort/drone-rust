@@ -1,6 +1,7 @@
 //! Frontiers (Yamauchi): free cells next to an unknown cell.
 
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::VecDeque;
 
 use glam::Vec2;
 use mapping::{Cell, OccupancyGrid};
@@ -77,7 +78,7 @@ pub fn information_gain(grid: &OccupancyGrid, from: (usize, usize), radius_m: f3
     const RAYS: usize = 64;
     let origin = grid.center(from.0, from.1);
     let step = grid.cell_m();
-    let mut unknown = HashSet::new();
+    let mut unknown = HashSet::default();
     for k in 0..RAYS {
         let a = std::f32::consts::TAU * k as f32 / RAYS as f32;
         let dir = Vec2::new(a.cos(), a.sin());
@@ -119,7 +120,7 @@ mod tests {
     #[test]
     fn known_disk_has_one_ring_frontier() {
         let g = disk();
-        let f = detect(&g, 4, &HashSet::new());
+        let f = detect(&g, 4, &HashSet::default());
         assert_eq!(f.len(), 1);
         assert!(f[0].centroid.length() < 0.5, "centered ring: {}", f[0].centroid);
         for &(i, j) in &f[0].cells {
@@ -148,6 +149,6 @@ mod tests {
                 }
             }
         }
-        assert!(detect(&g, 1, &HashSet::new()).is_empty());
+        assert!(detect(&g, 1, &HashSet::default()).is_empty());
     }
 }

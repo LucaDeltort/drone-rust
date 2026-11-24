@@ -5,7 +5,7 @@
 //! follow it, replan regularly as the map changes. Done when
 //! no frontier is reachable.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use drone_spec::Airframe;
 use glam::Vec2;
@@ -129,7 +129,7 @@ impl Explorer {
             next: 0,
             since_replan: f32::INFINITY,
             blacklist: Vec::new(),
-            exhausted: HashSet::new(),
+            exhausted: HashSet::default(),
             last_frontier_cells: Vec::new(),
             cell_m: 0.0,
             grid_origin: Vec2::ZERO,
