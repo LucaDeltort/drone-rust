@@ -7,11 +7,13 @@
 
 mod depth;
 mod lidar;
+mod lidar3d;
 mod nav;
 mod sonar;
 
 pub use depth::DepthCamera;
 pub use lidar::Lidar2D;
+pub use lidar3d::Lidar3D;
 pub use nav::{Baro, Gps, Imu};
 pub use sonar::Sonar;
 
@@ -182,6 +184,19 @@ pub fn build(spec: &SensorSpec, seed: u64) -> Box<dyn Sensor> {
             Noise { std_m: noise_std, growth_per_m2: 0.0, dropout },
             rng,
         )),
+        SensorKind::Lidar3D { channels, rays, fov_up_deg, fov_down_deg, range, noise_std, dropout } => {
+            Box::new(Lidar3D::new(
+                spec.mount,
+                spec.rate_hz,
+                channels,
+                rays,
+                fov_up_deg,
+                fov_down_deg,
+                range,
+                Noise { std_m: noise_std, growth_per_m2: 0.0, dropout },
+                rng,
+            ))
+        }
         SensorKind::Sonar { cone_deg, range, noise_std, max_incidence_deg } => Box::new(Sonar::new(
             spec.mount,
             spec.rate_hz,
@@ -283,7 +298,9 @@ pub(crate) mod test_util {
                 x: 0.0,
                 z: -11.0,
                 yaw_deg: 0.0,
+                elevation_m: 0.0,
             }]),
+            wind: Default::default(),
         })
         .unwrap()
     }

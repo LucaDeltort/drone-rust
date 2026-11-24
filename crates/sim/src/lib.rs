@@ -195,7 +195,7 @@ impl Sim {
         let now = self.steps as f64 * dt as f64;
         self.t = now as f32;
         self.distance_m += before.distance(self.truth.position);
-        let hit = self.world.collides(self.truth.position, self.spec.airframe.radius);
+        let hit = self.truth.flight.contact;
         self.collisions += (hit && !self.touching) as u32;
         self.touching = hit;
 

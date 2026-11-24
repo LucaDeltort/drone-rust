@@ -35,6 +35,9 @@ pub struct Map {
     dirty: bool,
     counts: Counts,
     agreement: Option<Agreement>,
+    /// The grid is projected from the 3D map (3D flight): measurements are not
+    /// integrated into it directly.
+    pub projected: bool,
 }
 
 #[derive(Resource)]
@@ -56,6 +59,13 @@ impl Map {
         self.last_t.clear();
         self.dirty = true;
         self.agreement = None;
+        // A projected grid must be projected again in full.
+        self.projected = false;
+    }
+
+    /// The grid changed outside of `integrate`: redraw it.
+    pub fn touch(&mut self) {
+        self.dirty = true;
     }
 
     /// Cell counts at the last refresh.
@@ -153,6 +163,7 @@ fn create_map(
         last_t: Vec::new(),
         dirty: true,
         agreement: None,
+        projected: false,
     });
 }
 
@@ -169,6 +180,7 @@ fn rebuild_map(
     materials: &mut Assets<StandardMaterial>,
 ) {
     map.grid = new_grid(world, settings);
+    map.projected = false;
     let _ = images.insert(&map.image, blank_image(&map.grid));
     for e in overlays {
         commands.entity(e).despawn();
@@ -223,7 +235,9 @@ fn integrate(
             if let Some(m) = m
                 && m.t > map.last_t[k]
             {
-                if est.ekf.is_some() {
+                if map.projected {
+                    // 3D flight: the 3D map fills the grid.
+                } else if est.ekf.is_some() {
                     map.grid.integrate(&m.reposed(&truth, &believed));
                 } else {
                     map.grid.integrate(m);
@@ -307,7 +321,9 @@ fn panel(
             }
 
             let (lo, hi) = (map.grid.y_lo, map.grid.y_hi);
-            if let Ok(d) = drones.single() {
+            if map.projected {
+                ui.label("3D flight: obstacles too tall to fly over (from the 3D map)");
+            } else if let Ok(d) = drones.single() {
                 let y = d.state.position.y;
                 if (lo..=hi).contains(&y) {
                     ui.label(format!("Drone in the slab ({lo:.1} to {hi:.1} m)"));

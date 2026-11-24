@@ -2,7 +2,7 @@
 
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use crate::{BuildError, TerrainSpec};
+use crate::{BuildError, TerrainFeature, TerrainSpec};
 
 /// Square height grid, centered on the origin.
 /// `heights[iz * n + ix]` = height at vertex (ix, iz).
@@ -24,25 +24,34 @@ impl Heightmap {
         }
         let n = cells + 1;
         let half = cells as f32 * cell_m / 2.0;
-        let heights = match *spec {
-            TerrainSpec::Flat { height } => vec![height; n * n],
-            TerrainSpec::Noise {
-                seed,
-                amplitude_m,
-                wavelength_m,
-                octaves,
-            } => {
-                let fbm = Fbm::<Perlin>::new(seed)
-                    .set_octaves(octaves)
-                    .set_frequency(1.0 / wavelength_m as f64);
-                (0..n * n)
-                    .map(|i| {
-                        let x = (i % n) as f64 * cell_m as f64 - half as f64;
-                        let z = (i / n) as f64 * cell_m as f64 - half as f64;
-                        // fBm stays roughly within [-1, 1].
-                        fbm.get([x, z]) as f32 * amplitude_m
-                    })
-                    .collect()
+        let fbm_heights = |seed: u32, amplitude_m: f32, wavelength_m: f32, octaves: usize| -> Vec<f32> {
+            let fbm = Fbm::<Perlin>::new(seed)
+                .set_octaves(octaves)
+                .set_frequency(1.0 / wavelength_m as f64);
+            (0..n * n)
+                .map(|i| {
+                    let x = (i % n) as f64 * cell_m as f64 - half as f64;
+                    let z = (i / n) as f64 * cell_m as f64 - half as f64;
+                    // fBm stays roughly within [-1, 1].
+                    fbm.get([x, z]) as f32 * amplitude_m
+                })
+                .collect()
+        };
+        let heights = match spec {
+            TerrainSpec::Flat { height } => vec![*height; n * n],
+            &TerrainSpec::Noise { seed, amplitude_m, wavelength_m, octaves } => {
+                fbm_heights(seed, amplitude_m, wavelength_m, octaves)
+            }
+            TerrainSpec::Landscape { seed, amplitude_m, wavelength_m, octaves, features } => {
+                let mut h = fbm_heights(*seed, *amplitude_m, *wavelength_m, *octaves);
+                for f in features {
+                    for (i, v) in h.iter_mut().enumerate() {
+                        let x = (i % n) as f32 * cell_m - half;
+                        let z = (i / n) as f32 * cell_m - half;
+                        *v = sculpt(*f, x, z, *v);
+                    }
+                }
+                h
             }
         };
         Ok(Self { n, cell_m, heights })
@@ -91,6 +100,36 @@ impl Heightmap {
     }
 }
 
+/// Applies a relief feature to the height `h` at (x, z).
+fn sculpt(f: TerrainFeature, x: f32, z: f32, h: f32) -> f32 {
+    match f {
+        TerrainFeature::Hill { x: cx, z: cz, radius_m, height_m } => {
+            let d = ((x - cx).powi(2) + (z - cz).powi(2)).sqrt() / radius_m;
+            if d >= 1.0 {
+                h
+            } else {
+                h + height_m * (d * std::f32::consts::FRAC_PI_2).cos().powi(2)
+            }
+        }
+        TerrainFeature::Pad { x: cx, z: cz, size, height_m, blend_m } => {
+            // Distance outside the rectangle (0 inside).
+            let dx = ((x - cx).abs() - size.0 / 2.0).max(0.0);
+            let dz = ((z - cz).abs() - size.1 / 2.0).max(0.0);
+            let d = (dx * dx + dz * dz).sqrt();
+            if d <= 0.0 {
+                return height_m;
+            }
+            if d >= blend_m {
+                return h;
+            }
+            // Smoothstep from the pad to the natural ground.
+            let k = d / blend_m;
+            let k = k * k * (3.0 - 2.0 * k);
+            height_m + (h - height_m) * k
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +165,24 @@ mod tests {
         let (lo, hi) = t.range();
         assert!(lo >= -6.0 * 1.5 && hi <= 6.0 * 1.5, "{lo}..{hi}");
         assert!(hi - lo > 1.0, "terrain too flat: {lo}..{hi}");
+    }
+
+    #[test]
+    fn landscape_features_shape_the_ground() {
+        let spec = TerrainSpec::Landscape {
+            seed: 2,
+            amplitude_m: 2.0,
+            wavelength_m: 40.0,
+            octaves: 3,
+            features: vec![
+                TerrainFeature::Hill { x: -20.0, z: 0.0, radius_m: 15.0, height_m: 10.0 },
+                TerrainFeature::Pad { x: 20.0, z: 0.0, size: (10.0, 6.0), height_m: 1.5, blend_m: 4.0 },
+            ],
+        };
+        let t = Heightmap::build(100.0, 1.0, &spec).unwrap();
+        assert!(t.height_at(-20.0, 0.0) > 7.0);
+        for (x, z) in [(20.0, 0.0), (24.0, 2.0), (16.0, -3.0)] {
+            assert!((t.height_at(x, z) - 1.5).abs() < 1e-4);
+        }
     }
 }

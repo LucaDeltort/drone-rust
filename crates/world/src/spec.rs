@@ -14,6 +14,9 @@ pub struct WorldSpec {
     pub cell_m: f32,
     pub terrain: TerrainSpec,
     pub obstacles: ObstaclesSpec,
+    /// Wind; calm when omitted.
+    #[serde(default)]
+    pub wind: crate::wind::WindSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +32,25 @@ pub enum TerrainSpec {
         wavelength_m: f32,
         octaves: usize,
     },
+    /// Noise terrain sculpted by features: hills, hollows, flat building pads.
+    Landscape {
+        seed: u32,
+        amplitude_m: f32,
+        wavelength_m: f32,
+        octaves: usize,
+        #[serde(default)]
+        features: Vec<TerrainFeature>,
+    },
+}
+
+/// Hand-placed relief, applied in order on top of the noise.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TerrainFeature {
+    /// Smooth bump (cos² profile); a negative height digs a hollow.
+    Hill { x: f32, z: f32, radius_m: f32, height_m: f32 },
+    /// Flat platform at absolute height `height_m` over the rectangle `size` (x, z)
+    /// centered on (x, z), blending into the terrain over `blend_m`.
+    Pad { x: f32, z: f32, size: (f32, f32), height_m: f32, blend_m: f32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,6 +76,9 @@ pub struct ObstacleSpec {
     pub z: f32,
     #[serde(default)]
     pub yaw_deg: f32,
+    /// Height of the base above the ground, in m: lintels, slabs, roofs, bridges.
+    #[serde(default)]
+    pub elevation_m: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -62,6 +87,9 @@ pub enum ObstacleShape {
     Box { size: Vec3 },
     /// Vertical cylinder (pole, tree).
     Cylinder { radius: f32, height: f32 },
+    /// Gable roof: a triangular prism, `size` = (length, height, width); the ridge
+    /// runs along the local X axis, at mid-width.
+    Roof { size: Vec3 },
 }
 
 impl WorldSpec {
@@ -82,6 +110,7 @@ impl WorldSpec {
                 count: 60,
                 clear_radius_m: 10.0,
             },
+            wind: Default::default(),
         }
     }
 
@@ -102,19 +131,31 @@ impl WorldSpec {
         if self.cell_m > self.size_m {
             return bad("cell_m must be <= size_m");
         }
-        if let TerrainSpec::Noise {
-            wavelength_m,
-            octaves,
-            ..
-        } = self.terrain
+        if let TerrainSpec::Noise { wavelength_m, octaves, .. } | TerrainSpec::Landscape { wavelength_m, octaves, .. } =
+            self.terrain
             && (wavelength_m <= 0.0 || octaves == 0)
         {
             return bad("wavelength_m must be > 0 and octaves >= 1");
         }
+        if let TerrainSpec::Landscape { features, .. } = &self.terrain {
+            for f in features {
+                let ok = match *f {
+                    TerrainFeature::Hill { radius_m, .. } => radius_m > 0.0,
+                    TerrainFeature::Pad { size, blend_m, .. } => size.0 > 0.0 && size.1 > 0.0 && blend_m >= 0.0,
+                };
+                if !ok {
+                    return bad("terrain feature with a non-positive size");
+                }
+            }
+        }
+        self.wind.validate().map_err(BuildError::Invalid)?;
         if let ObstaclesSpec::List(list) = &self.obstacles {
             let half = self.size_m / 2.0;
             if list.iter().any(|o| o.x.abs() > half || o.z.abs() > half) {
                 return bad("obstacle off the map");
+            }
+            if list.iter().any(|o| o.elevation_m.is_nan() || o.elevation_m < 0.0) {
+                return bad("elevation_m must be >= 0");
             }
         }
         if let ObstaclesSpec::City(city) = &self.obstacles {

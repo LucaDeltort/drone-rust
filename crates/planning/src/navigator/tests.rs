@@ -41,7 +41,7 @@ fn run(world: &mut World, spec: &DroneSpec, goal: Vec2, limit_s: f32, event: Eve
         let before = state.position;
         state.step(cmd, &spec.airframe, world, DT);
         distance_m += before.distance(state.position);
-        let hit = world.collides(state.position, spec.airframe.radius);
+        let hit = state.flight.contact;
         collisions += (hit && !touching) as u32;
         touching = hit;
         let body = Pose::from(&state);
@@ -152,4 +152,15 @@ fn scout_crosses_the_procedural_map() {
         .expect("free point");
     let o = run(&mut w, &DroneSpec::scout(), goal, 120.0, &mut |_, _, _| {});
     check(&format!("seed 42, B = ({:.1}, {:.1})", goal.x, goal.y), &o, 120.0);
+}
+
+/// The house map: relief, gusty wind, a 3D lidar. B is behind the house, seen
+/// from the take-off pad: the drone goes around it, leaning into the gusts,
+/// without touching anything.
+#[test]
+fn mapper_flies_around_the_house_in_the_wind() {
+    let mut w = World::build(&WorldSpec::from_ron(include_str!("../../../../maps/house.ron")).unwrap()).unwrap();
+    assert!(w.wind.spec().speed_ms > 0.0);
+    let o = run(&mut w, &DroneSpec::mapper(), Vec2::new(-22.0, -34.0), 90.0, &mut |_, _, _| {});
+    check("house, behind the house, in the wind", &o, 90.0);
 }

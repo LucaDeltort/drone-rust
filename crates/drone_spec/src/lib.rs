@@ -51,6 +51,19 @@ pub enum SensorKind {
         #[serde(default)]
         dropout: f32,
     },
+    /// Spinning multi-channel lidar: `channels` rings between `fov_down_deg` and
+    /// `fov_up_deg` (elevation), `rays` per ring over 360°. Measures a 3D point
+    /// cloud, delivered as a depth image (`rays` × `channels`).
+    Lidar3D {
+        channels: u32,
+        rays: u32,
+        fov_up_deg: f32,
+        fov_down_deg: f32,
+        range: f32,
+        noise_std: f32,
+        #[serde(default)]
+        dropout: f32,
+    },
     /// A single distance: the nearest echo within a cone.
     Sonar {
         cone_deg: f32,
@@ -106,18 +119,67 @@ fn default_max_incidence() -> f32 {
     60.0
 }
 
-/// Kinematic limits of the airframe.
+/// Limits and flight dynamics of the airframe.
+///
+/// The drone is a quadrotor: it accelerates by tilting its thrust, and feels drag
+/// relative to the air (so the wind). The fields after `radius` have defaults
+/// typical of a small quadrotor.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Airframe {
     pub mass_kg: f32,
-    /// Max speed, in m/s.
+    /// Max speed commanded by the flight controller, in m/s.
     pub max_speed: f32,
-    /// Max acceleration, in m/s².
+    /// Max acceleration commanded by the flight controller, in m/s².
     pub max_accel: f32,
     /// Max yaw rate, in °/s.
     pub max_yaw_rate: f32,
     /// Radius of the sphere containing the drone, in m.
     pub radius: f32,
+    /// Max thrust over weight.
+    #[serde(default = "defaults::thrust_to_weight")]
+    pub thrust_to_weight: f32,
+    /// Max tilt of the thrust axis, in degrees.
+    #[serde(default = "defaults::max_tilt_deg")]
+    pub max_tilt_deg: f32,
+    /// Max tilt rate, in °/s.
+    #[serde(default = "defaults::tilt_rate_deg")]
+    pub tilt_rate_deg: f32,
+    /// Time constant of the attitude response, in s.
+    #[serde(default = "defaults::attitude_tau_s")]
+    pub attitude_tau_s: f32,
+    /// Time constant of the motors (thrust response), in s.
+    #[serde(default = "defaults::motor_tau_s")]
+    pub motor_tau_s: f32,
+    /// Linear (rotor) drag, in 1/s: deceleration per m/s of airspeed.
+    #[serde(default = "defaults::drag")]
+    pub drag: f32,
+    /// Quadratic (body) drag, in 1/m: deceleration per (m/s)² of airspeed.
+    #[serde(default = "defaults::drag_quad")]
+    pub drag_quad: f32,
+}
+
+mod defaults {
+    pub fn thrust_to_weight() -> f32 {
+        2.2
+    }
+    pub fn max_tilt_deg() -> f32 {
+        40.0
+    }
+    pub fn tilt_rate_deg() -> f32 {
+        400.0
+    }
+    pub fn attitude_tau_s() -> f32 {
+        0.06
+    }
+    pub fn motor_tau_s() -> f32 {
+        0.03
+    }
+    pub fn drag() -> f32 {
+        0.25
+    }
+    pub fn drag_quad() -> f32 {
+        0.015
+    }
 }
 
 /// Onboard camera, fixed at the front of the drone.
@@ -148,6 +210,8 @@ impl std::error::Error for SpecError {}
 
 /// Default preset, embedded in the binary.
 pub const SCOUT_RON: &str = include_str!("../../../drones/scout.ron");
+/// 3D mapping preset (3D lidar), embedded in the binary.
+pub const MAPPER_RON: &str = include_str!("../../../drones/mapper.ron");
 
 impl DroneSpec {
     pub fn from_ron(text: &str) -> Result<Self, SpecError> {
@@ -160,6 +224,10 @@ impl DroneSpec {
         Self::from_ron(SCOUT_RON).expect("drones/scout.ron is valid")
     }
 
+    pub fn mapper() -> Self {
+        Self::from_ron(MAPPER_RON).expect("drones/mapper.ron is valid")
+    }
+
     pub fn validate(&self) -> Result<(), SpecError> {
         let a = &self.airframe;
         let positive = [
@@ -168,9 +236,21 @@ impl DroneSpec {
             ("max_accel", a.max_accel),
             ("max_yaw_rate", a.max_yaw_rate),
             ("radius", a.radius),
+            ("tilt_rate_deg", a.tilt_rate_deg),
+            ("attitude_tau_s", a.attitude_tau_s),
+            ("motor_tau_s", a.motor_tau_s),
         ];
         if let Some((name, _)) = positive.iter().find(|(_, v)| !v.is_finite() || *v <= 0.0) {
             return Err(SpecError::Invalid(format!("{name} must be > 0")));
+        }
+        if a.thrust_to_weight.is_nan() || a.thrust_to_weight <= 1.05 {
+            return Err(SpecError::Invalid("thrust_to_weight must be > 1.05 to hover".into()));
+        }
+        if !(5.0..=80.0).contains(&a.max_tilt_deg) {
+            return Err(SpecError::Invalid("max_tilt_deg out of 5..=80".into()));
+        }
+        if !(a.drag >= 0.0 && a.drag_quad >= 0.0) {
+            return Err(SpecError::Invalid("drag must be >= 0".into()));
         }
         let fov = self.camera.fov_deg;
         if !(1.0..=170.0).contains(&fov) {
@@ -199,6 +279,17 @@ impl SensorSpec {
             SensorKind::Lidar2D { rays, range, noise_std, dropout } => {
                 if rays == 0 || rays > 10_000 {
                     return Err("rays out of 1..=10000".into());
+                }
+                pos("range", range)?;
+                non_neg("noise_std", noise_std)?;
+                unit("dropout", dropout)
+            }
+            SensorKind::Lidar3D { channels, rays, fov_up_deg, fov_down_deg, range, noise_std, dropout } => {
+                if !(1..=128).contains(&channels) || !(1..=4096).contains(&rays) {
+                    return Err("channels out of 1..=128 or rays out of 1..=4096".into());
+                }
+                if !(-90.0 <= fov_down_deg && fov_down_deg < fov_up_deg && fov_up_deg <= 90.0) {
+                    return Err("need -90 <= fov_down_deg < fov_up_deg <= 90".into());
                 }
                 pos("range", range)?;
                 non_neg("noise_std", noise_std)?;
@@ -271,7 +362,7 @@ mod tests {
 
     #[test]
     fn all_presets_load() {
-        for path in ["scout.ron", "heavy.ron"] {
+        for path in ["scout.ron", "heavy.ron", "pro.ron", "cheap.ron", "mapper.ron"] {
             let text = std::fs::read_to_string(format!("{}/../../drones/{path}", env!("CARGO_MANIFEST_DIR"))).unwrap();
             let spec = DroneSpec::from_ron(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
             assert!(!spec.sensors.is_empty(), "{path} has no sensor");

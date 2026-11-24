@@ -6,7 +6,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use planning::{Explorer, ExplorerConfig, Status, Strategy};
 
 use crate::{
-    CurrentWorld, WorldRebuilt,
+    WorldRebuilt,
     drone::{DroneConfig, PilotCommand, SimDrone, step_drone},
     mapview::Map,
     mission::Mission,
@@ -26,6 +26,8 @@ pub struct Exploration {
     /// Collisions (contact entries) since the last world change.
     pub collisions: u32,
     touching: bool,
+    /// Distance kept from obstacles, beyond the drone's radius, in m.
+    pub clearance_m: f32,
 }
 
 impl Exploration {
@@ -33,6 +35,9 @@ impl Exploration {
         self.explorer.is_some()
     }
 }
+
+/// Default distance kept from obstacles, beyond the drone's radius, in m.
+pub const DEFAULT_CLEARANCE_M: f32 = 0.8;
 
 pub struct ExplorePlugin;
 
@@ -47,6 +52,7 @@ impl Plugin for ExplorePlugin {
             distance_m: 0.0,
             collisions: 0,
             touching: false,
+            clearance_m: DEFAULT_CLEARANCE_M,
         })
         .add_systems(FixedUpdate, (explore.before(step_drone), count_collisions.after(step_drone)))
         .add_systems(Update, (toggle_key, reset_on_rebuild, draw_plan))
@@ -59,6 +65,8 @@ fn start(ex: &mut Exploration, mission: &mut Mission, map: &Map, config: &DroneC
     mission.navigator = None;
     let mut cfg = ExplorerConfig::new(ex.strategy, &config.0.airframe);
     cfg.lambda = ex.lambda;
+    cfg.inflate_m = config.0.airframe.radius + ex.clearance_m;
+    cfg.unknown_margin_m = cfg.inflate_m;
     let altitude = (map.grid.y_lo + map.grid.y_hi) / 2.0;
     ex.explorer = Some(Explorer::new(cfg, altitude));
     ex.elapsed = 0.0;
@@ -90,7 +98,7 @@ fn toggle_key(
     }
 }
 
-fn explore(
+pub fn explore(
     time: Res<Time>,
     mut ex: ResMut<Exploration>,
     map: Res<Map>,
@@ -113,14 +121,9 @@ fn explore(
     }
 }
 
-fn count_collisions(
-    mut ex: ResMut<Exploration>,
-    world: Res<CurrentWorld>,
-    config: Res<DroneConfig>,
-    drones: Query<&SimDrone>,
-) {
+fn count_collisions(mut ex: ResMut<Exploration>, drones: Query<&SimDrone>) {
     let Ok(d) = drones.single() else { return };
-    let hit = world.0.collides(d.state.position, config.0.airframe.radius);
+    let hit = d.state.flight.contact;
     if hit && !ex.touching {
         ex.collisions += 1;
     }

@@ -4,7 +4,7 @@
 //!   cargo run -p viewer                                  # random seed
 //!   cargo run -p viewer -- --seed 42                     # seed-generated world
 //!   cargo run -p viewer -- --map maps/corridor.ron       # hand-drawn map
-//!   cargo run -p viewer -- --drone drones/scout.ron      # another drone (default: Scout)
+//!   cargo run -p viewer -- --drone drones/scout.ron      # another drone (default: Mapper)
 //!   cargo run -p viewer -- --pose ekf-gps                # estimated pose (truth, ekf-gps, ekf)
 //!
 //! Common keys: Tab = pilot <-> free camera, [ and ] = onboard camera FOV,
@@ -13,8 +13,11 @@
 //! Free camera: right click + mouse, WASD, Q/E, Shift, wheel.
 //! Missions: X = exploration, G = go to B, B = place B under the cursor,
 //! O = unexpected obstacle in front of the drone.
+//! 3D map: M = show/hide the voxel map, V = show/hide the real world.
 
 mod drone;
+mod map3d;
+mod wind;
 mod explore;
 mod scene;
 mod mapview;
@@ -93,7 +96,7 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         source: source.unwrap_or_else(|| Source::Seed(random_seed())),
-        drone: drone.unwrap_or_else(DroneSpec::scout),
+        drone: drone.unwrap_or_else(DroneSpec::mapper),
         pose,
     })
 }
@@ -163,6 +166,7 @@ fn main() {
         })
         .add_plugins((DronePlugin, sensing::SensingPlugin, mapview::MapPlugin, explore::ExplorePlugin, mission::MissionPlugin))
         .add_plugins(pose::PosePlugin(args.pose))
+        .add_plugins((map3d::Map3dPlugin, wind::WindPlugin))
         .insert_resource(args.source)
         .insert_resource(CurrentWorld(world))
         .insert_resource(FpvFov(args.drone.camera.fov_deg))
@@ -294,14 +298,23 @@ fn hud(
             "FREE CAMERA (Tab: pilot)\nright click + mouse, WASD, Q/E, Shift, wheel"
         }
     };
+    let (pitch, roll) = s.tilt();
+    let wind = s.flight.wind;
+    let thrust = 100.0 * s.flight.thrust / (config.0.airframe.thrust_to_weight * world::drone::G);
     let text = format!(
-        "{}\n{}: {:.1} m/s, altitude {:.1} m, heading {:.0} deg, FOV {:.0} deg ([ and ])\n{controls}",
+        "{}\n{}: {:.1} m/s, altitude {:.1} m, heading {:.0} deg, FOV {:.0} deg ([ and ])\n\
+         pitch {:+.0} deg, roll {:+.0} deg, thrust {:.0} %, wind {:.1} m/s{}\n{controls}",
         status.0,
         config.0.name,
         s.velocity.length(),
         s.altitude(&world.0),
         heading,
         fov.0,
+        pitch.to_degrees(),
+        roll.to_degrees(),
+        thrust,
+        wind.length(),
+        if s.flight.contact { "  CONTACT" } else { "" },
     );
     for mut t in &mut info {
         if t.0 != text {

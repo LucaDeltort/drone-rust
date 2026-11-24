@@ -1,0 +1,110 @@
+// A house with its garden, and a large building across the way, on hilly ground,
+// in a gusty west-south-west wind. Built for 3D mapping: roofs, overhangs, an
+// open door, a porch and a passage the drone can fly under or through.
+// Frame: Y up, origin at the center, meters. The drone takes off from the origin.
+// Run: cargo run --release -p viewer -- --map maps/house.ron --drone drones/mapper.ron
+WorldSpec(
+    size_m: 140.0,
+    cell_m: 1.0,
+    terrain: Landscape(
+        seed: 7,
+        amplitude_m: 2.5,
+        wavelength_m: 45.0,
+        octaves: 4,
+        features: [
+            // Take-off pad.
+            Pad(x: 0.0, z: 0.0, size: (10.0, 10.0), height_m: 0.0, blend_m: 6.0),
+            // House plot, a little raised.
+            Pad(x: -22.0, z: -16.0, size: (30.0, 24.0), height_m: 0.5, blend_m: 8.0),
+            // Building plot and its forecourt.
+            Pad(x: 26.0, z: 12.0, size: (46.0, 40.0), height_m: 0.0, blend_m: 10.0),
+            // Relief.
+            Hill(x: -45.0, z: 40.0, radius_m: 28.0, height_m: 12.0),
+            Hill(x: 48.0, z: -45.0, radius_m: 22.0, height_m: 8.0),
+            Hill(x: -10.0, z: 55.0, radius_m: 15.0, height_m: 5.0),
+            // A pond, dug into the ground.
+            Hill(x: 12.0, z: -40.0, radius_m: 10.0, height_m: -3.0),
+        ],
+    ),
+    wind: (
+        speed_ms: 4.0,      // at 10 m above the ground
+        from_deg: 250.0,    // from the west-south-west
+        gust_ms: 3.0,
+        turbulence_ms: 0.8,
+        seed: 7,
+    ),
+    obstacles: List([
+        // ---------------------------------------------------------------- House
+        // 14 m × 10 m, two storeys (6 m), centered on (-22, -18).
+        // North wall.
+        (shape: Box(size: (14.0, 6.0, 0.3)), x: -22.0, z: -23.0),
+        // West and east walls.
+        (shape: Box(size: (0.3, 6.0, 10.0)), x: -29.0, z: -18.0),
+        (shape: Box(size: (0.3, 6.0, 10.0)), x: -15.0, z: -18.0),
+        // South wall, facing the take-off pad: a 2 m wide door, open.
+        (shape: Box(size: (6.0, 6.0, 0.3)), x: -26.0, z: -13.0),
+        (shape: Box(size: (6.0, 6.0, 0.3)), x: -18.0, z: -13.0),
+        (shape: Box(size: (2.0, 3.6, 0.3)), x: -22.0, z: -13.0, elevation_m: 2.4),
+        // Upper floor slab, 3 m up: the ground floor is a room the drone can enter.
+        (shape: Box(size: (13.7, 0.25, 9.7)), x: -22.0, z: -18.0, elevation_m: 3.0),
+        // Interior wall, with a passage on its south side.
+        (shape: Box(size: (0.2, 3.0, 6.0)), x: -24.0, z: -20.0),
+        // Gable roof, ridge east-west, with overhangs; and its chimney.
+        (shape: Roof(size: (15.0, 3.5, 11.5)), x: -22.0, z: -18.0, elevation_m: 6.0),
+        (shape: Box(size: (0.8, 3.2, 0.8)), x: -18.0, z: -20.5, elevation_m: 6.5),
+        // Porch: a roof on two pillars, in front of the door.
+        (shape: Cylinder(radius: 0.15, height: 2.9), x: -27.5, z: -10.2),
+        (shape: Cylinder(radius: 0.15, height: 2.9), x: -16.5, z: -10.2),
+        (shape: Box(size: (12.0, 0.2, 3.4)), x: -22.0, z: -11.5, elevation_m: 2.9),
+        // Garage on the east side, flat roof.
+        (shape: Box(size: (6.0, 3.0, 7.0)), x: -12.0, z: -19.5),
+        // Garden shed with its little roof, a bit askew.
+        (shape: Box(size: (2.5, 2.2, 2.0)), x: -34.0, z: -6.0, yaw_deg: 15.0),
+        (shape: Roof(size: (3.0, 1.0, 2.6)), x: -34.0, z: -6.0, yaw_deg: 15.0, elevation_m: 2.2),
+        // Garden fence: low enough to fly over.
+        (shape: Box(size: (0.1, 0.9, 26.0)), x: -38.0, z: -16.0),
+        (shape: Box(size: (28.0, 0.9, 0.1)), x: -24.0, z: -29.0),
+        // Garden trees: trunks, and canopies the drone can pass under.
+        (shape: Cylinder(radius: 0.3, height: 7.0), x: -33.0, z: -24.0),
+        (shape: Box(size: (3.0, 3.0, 3.0)), x: -33.0, z: -24.0, elevation_m: 3.5),
+        (shape: Cylinder(radius: 0.35, height: 8.0), x: -8.0, z: -6.0),
+        (shape: Box(size: (3.5, 3.5, 3.5)), x: -8.0, z: -6.0, elevation_m: 4.0, yaw_deg: 20.0),
+        (shape: Cylinder(radius: 0.25, height: 6.0), x: -30.0, z: -3.0),
+
+        // ---------------------------------------------------------- Big building
+        // L-shaped: a 16 m block (x 11..41, z 1..15) cut by a ground-level
+        // passage, and a 22 m wing to the north-east.
+        (shape: Box(size: (13.0, 16.0, 14.0)), x: 17.5, z: 8.0),
+        (shape: Box(size: (13.0, 16.0, 14.0)), x: 34.5, z: 8.0),
+        // Above the passage (4 m wide, 5 m high): the drone can fly through.
+        (shape: Box(size: (4.0, 11.0, 14.0)), x: 26.0, z: 8.0, elevation_m: 5.0),
+        (shape: Box(size: (12.0, 22.0, 16.0)), x: 35.0, z: 23.0),
+        // Penthouse set back on the roof, and rooftop equipment.
+        (shape: Box(size: (14.0, 5.0, 9.0)), x: 21.0, z: 9.0, elevation_m: 16.0),
+        (shape: Box(size: (3.0, 2.0, 3.0)), x: 13.5, z: 4.0, elevation_m: 16.0),
+        (shape: Cylinder(radius: 1.3, height: 3.0), x: 36.0, z: 10.0, elevation_m: 16.0),
+        (shape: Cylinder(radius: 0.1, height: 8.0), x: 38.0, z: 27.0, elevation_m: 22.0),
+        // Entrance canopy on the south facade, on pillars.
+        (shape: Box(size: (10.0, 0.3, 3.5)), x: 17.0, z: -0.7, elevation_m: 3.6),
+        (shape: Cylinder(radius: 0.2, height: 3.6), x: 12.5, z: -2.2),
+        (shape: Cylinder(radius: 0.2, height: 3.6), x: 21.5, z: -2.2),
+        // A sloped glass roof over the wing's terrace.
+        (shape: Roof(size: (10.0, 2.0, 6.0)), x: 22.0, z: 22.0, yaw_deg: 90.0, elevation_m: 6.0),
+        (shape: Box(size: (8.0, 6.0, 12.0)), x: 22.0, z: 22.0),
+
+        // ----------------------------------------------------- Car park, streetlights
+        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -12.0),
+        (shape: Box(size: (4.5, 1.5, 1.9)), x: 12.0, z: -15.0),
+        (shape: Box(size: (4.8, 1.8, 2.0)), x: 20.0, z: -12.0, yaw_deg: 5.0),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -8.0),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 24.0, z: -8.0),
+        (shape: Cylinder(radius: 0.12, height: 6.0), x: 8.0, z: -20.0),
+
+        // --------------------------------------------------------- On the hills
+        (shape: Cylinder(radius: 0.4, height: 9.0), x: -45.0, z: 35.0),
+        (shape: Cylinder(radius: 0.4, height: 8.0), x: -38.0, z: 45.0),
+        (shape: Cylinder(radius: 0.4, height: 7.0), x: -52.0, z: 44.0),
+        (shape: Box(size: (4.0, 2.5, 4.0)), x: 46.0, z: -42.0, yaw_deg: 30.0),
+        (shape: Roof(size: (4.5, 1.5, 4.5)), x: 46.0, z: -42.0, yaw_deg: 30.0, elevation_m: 2.5),
+    ]),
+)

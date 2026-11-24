@@ -31,8 +31,14 @@ pub fn spawn_world(
         perceptual_roughness: 0.8,
         ..default()
     });
+    let roof_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.27, 0.18),
+        perceptual_roughness: 0.7,
+        ..default()
+    });
     for o in &world.obstacles {
-        spawn_obstacle(o, obstacle_mat.clone(), commands, meshes);
+        let mat = if matches!(o.shape, ObstacleShape::Roof { .. }) { roof_mat.clone() } else { obstacle_mat.clone() };
+        spawn_obstacle(o, mat, commands, meshes);
     }
 
     // Marker of the drone's starting point (origin).
@@ -55,18 +61,50 @@ pub fn spawn_obstacle(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let mesh = match o.shape {
-        ObstacleShape::Box { size } => meshes.add(Cuboid::from_size(size)),
-        ObstacleShape::Cylinder { radius, height } => meshes.add(Cylinder::new(radius, height)),
+    let (mesh, center) = match o.shape {
+        // Bevy primitives are centered: raise by half the height.
+        ObstacleShape::Box { size } => (meshes.add(Cuboid::from_size(size)), o.base + Vec3::Y * (size.y / 2.0)),
+        ObstacleShape::Cylinder { radius, height } => {
+            (meshes.add(Cylinder::new(radius, height)), o.base + Vec3::Y * (height / 2.0))
+        }
+        ObstacleShape::Roof { size } => (meshes.add(roof_mesh(size)), o.base),
     };
-    // Bevy primitives are centered: raise by half the height.
-    let center = o.base + Vec3::Y * (o.height() / 2.0);
     commands.spawn((
         Mesh3d(mesh),
         MeshMaterial3d(material),
         Transform::from_translation(center).with_rotation(Quat::from_rotation_y(o.yaw)),
         WorldEntity,
     ));
+}
+
+/// Gable roof, base center at the origin, ridge along X; flat-shaded.
+fn roof_mesh(size: Vec3) -> Mesh {
+    let (hx, h, hz) = (size.x / 2.0, size.y, size.z / 2.0);
+    let (a, b, c) = (Vec3::new(0.0, 0.0, -hz), Vec3::new(0.0, h, 0.0), Vec3::new(0.0, 0.0, hz));
+    let at = |p: Vec3, x: f32| (p + Vec3::X * x).to_array();
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    let mut face = |pts: &[[f32; 3]]| {
+        let p: Vec<Vec3> = pts.iter().map(|&q| Vec3::from(q)).collect();
+        let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
+        let base = positions.len() as u32;
+        positions.extend_from_slice(pts);
+        normals.extend(std::iter::repeat_n(n.to_array(), pts.len()));
+        for k in 1..pts.len() as u32 - 1 {
+            indices.extend_from_slice(&[base, base + k, base + k + 1]);
+        }
+    };
+    // Counter-clockwise seen from outside.
+    face(&[at(a, -hx), at(c, -hx), at(b, -hx)]); // west gable
+    face(&[at(a, hx), at(b, hx), at(c, hx)]); // east gable
+    face(&[at(c, -hx), at(c, hx), at(b, hx), at(b, -hx)]); // south slope (+Z)
+    face(&[at(a, hx), at(a, -hx), at(b, -hx), at(b, hx)]); // north slope (-Z)
+    face(&[at(a, -hx), at(a, hx), at(c, hx), at(c, -hx)]); // underside
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
 }
 
 /// Triangulated mesh of the height grid, colored by altitude.

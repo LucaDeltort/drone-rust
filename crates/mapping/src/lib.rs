@@ -14,7 +14,9 @@ use glam::{Quat, Vec2, Vec3};
 use sensors::{Data, Measurement};
 
 mod matching;
+mod voxel;
 pub use matching::{MatchConfig, ScanMatch};
+pub use voxel::{Key, VoxelCounts, VoxelMap};
 
 /// Readable state of a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +301,27 @@ impl OccupancyGrid {
             touched += 1;
         }
         touched
+    }
+
+    /// Forces the state of a cell, for a map projected from another one (the 3D
+    /// map). The evidence counts are left alone.
+    pub fn set_cell(&mut self, i: usize, j: usize, cell: Cell) {
+        let target = match cell {
+            Cell::Unknown => 0.0,
+            Cell::Free => self.params.min,
+            Cell::Occupied => self.params.max,
+        };
+        let k = j * self.nx + i;
+        if self.logodds[k] == target {
+            return;
+        }
+        self.logodds[k] = target;
+        if cell != Cell::Unknown {
+            self.bounds = Some(match self.bounds {
+                None => [i, j, i, j],
+                Some([i0, j0, i1, j1]) => [i0.min(i), j0.min(j), i1.max(i), j1.max(j)],
+            });
+        }
     }
 
     /// The drone's body occupies this disk: there is no obstacle there (otherwise it would

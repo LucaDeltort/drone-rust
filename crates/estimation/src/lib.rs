@@ -138,6 +138,7 @@ impl Ekf {
             yaw: self.yaw(),
             acceleration: rot_y(self.yaw(), self.last_accel),
             yaw_rate: self.last_yaw_rate,
+            flight: Default::default(),
         }
     }
 

@@ -14,10 +14,13 @@ mod raycast;
 pub mod rng;
 mod spec;
 mod terrain;
+mod wind;
 
 pub use city::CitySpec;
+pub use collision::Contact;
 pub use raycast::Hit;
-pub use spec::{ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainSpec, WorldSpec};
+pub use spec::{ObstacleShape, ObstacleSpec, ObstaclesSpec, TerrainFeature, TerrainSpec, WorldSpec};
+pub use wind::{Wind, WindSpec};
 pub use terrain::Heightmap;
 
 
@@ -38,20 +41,39 @@ impl Obstacle {
     /// Height of the obstacle above its base.
     pub fn height(&self) -> f32 {
         match self.shape {
-            ObstacleShape::Box { size } => size.y,
+            ObstacleShape::Box { size } | ObstacleShape::Roof { size } => size.y,
             ObstacleShape::Cylinder { height, .. } => height,
         }
+    }
+
+    /// Point (x, z) in the obstacle frame (inverse yaw rotation), relative to its base.
+    fn local_xz(&self, x: f32, z: f32) -> (f32, f32) {
+        let (dx, dz) = (x - self.base.x, z - self.base.z);
+        let (s, c) = self.yaw.sin_cos();
+        (c * dx - s * dz, s * dx + c * dz)
+    }
+
+    /// Vertical extent (bottom, top) of the matter above (x, z), if any.
+    pub fn span_at(&self, x: f32, z: f32) -> Option<(f32, f32)> {
+        if !self.covers(x, z) {
+            return None;
+        }
+        let top = match self.shape {
+            ObstacleShape::Roof { size } => {
+                let (_, lz) = self.local_xz(x, z);
+                size.y * (1.0 - lz.abs() / (size.z / 2.0)).max(0.0)
+            }
+            _ => self.height(),
+        };
+        Some((self.base.y, self.base.y + top))
     }
 
     /// Is the point (x, z) inside the ground footprint?
     pub fn covers(&self, x: f32, z: f32) -> bool {
         let (dx, dz) = (x - self.base.x, z - self.base.z);
         match self.shape {
-            ObstacleShape::Box { size } => {
-                // Local frame of the obstacle: inverse yaw rotation.
-                let (s, c) = self.yaw.sin_cos();
-                let lx = c * dx - s * dz;
-                let lz = s * dx + c * dz;
+            ObstacleShape::Box { size } | ObstacleShape::Roof { size } => {
+                let (lx, lz) = self.local_xz(x, z);
                 lx.abs() <= size.x / 2.0 && lz.abs() <= size.z / 2.0
             }
             ObstacleShape::Cylinder { radius, .. } => dx * dx + dz * dz <= radius * radius,
@@ -61,7 +83,7 @@ impl Obstacle {
     /// Radius of the circle containing the ground footprint.
     pub fn footprint_radius(&self) -> f32 {
         match self.shape {
-            ObstacleShape::Box { size } => 0.5 * (size.x * size.x + size.z * size.z).sqrt(),
+            ObstacleShape::Box { size } | ObstacleShape::Roof { size } => 0.5 * (size.x * size.x + size.z * size.z).sqrt(),
             ObstacleShape::Cylinder { radius, .. } => radius,
         }
     }
@@ -75,6 +97,8 @@ pub struct World {
     /// the spatial index up to date (otherwise queries fall back to a brute-force walk).
     pub obstacles: Vec<Obstacle>,
     pub(crate) index: index::ObstacleIndex,
+    /// Wind field; can be changed in flight.
+    pub wind: Wind,
 }
 
 impl World {
@@ -85,7 +109,11 @@ impl World {
             ObstaclesSpec::None => Vec::new(),
             ObstaclesSpec::List(list) => list
                 .iter()
-                .map(|o| place(&terrain, o.shape, o.x, o.z, o.yaw_deg.to_radians()))
+                .map(|o| {
+                    let mut p = place(&terrain, o.shape, o.x, o.z, o.yaw_deg.to_radians());
+                    p.base.y += o.elevation_m;
+                    p
+                })
                 .collect(),
             ObstaclesSpec::Random {
                 seed,
@@ -95,7 +123,7 @@ impl World {
             ObstaclesSpec::City(city) => city::generate(&terrain, city),
         };
         let index = index::ObstacleIndex::build(&obstacles, terrain.half_size());
-        Ok(Self { terrain, obstacles, index })
+        Ok(Self { terrain, obstacles, index, wind: Wind::new(spec.wind) })
     }
 
     /// Adds an obstacle resting on the terrain at (x, z), for example an unexpected
@@ -138,9 +166,11 @@ impl World {
             spans.push((y_lo, ground.min(y_hi)));
         }
         for o in self.obstacles_at(x, z) {
-            let (b, t) = (o.base.y.max(y_lo), (o.base.y + o.height()).min(y_hi));
-            if b <= t && o.covers(x, z) {
-                spans.push((b, t));
+            if let Some((b, t)) = o.span_at(x, z) {
+                let (b, t) = (b.max(y_lo), t.min(y_hi));
+                if b <= t {
+                    spans.push((b, t));
+                }
             }
         }
         if spans.is_empty() {
@@ -288,6 +318,46 @@ mod tests {
         assert!(w.obstacles.len() >= 3);
         // Flat terrain: all bases at the same height.
         assert!(w.obstacles.iter().all(|o| o.base.y == w.obstacles[0].base.y));
+    }
+
+    #[test]
+    fn house_map_has_relief_roofs_and_wind() {
+        let spec = WorldSpec::from_ron(include_str!("../../../maps/house.ron")).unwrap();
+        let w = World::build(&spec).unwrap();
+        assert!(w.obstacles.iter().any(|o| matches!(o.shape, ObstacleShape::Roof { .. })));
+        let (lo, hi) = w.terrain.range();
+        assert!(hi - lo > 10.0, "{lo}..{hi}");
+        // Take-off pad and house plot are flat.
+        assert!(w.terrain.height_at(2.0, -2.0).abs() < 1e-4);
+        assert!((w.terrain.height_at(-22.0, -18.0) - 0.5).abs() < 1e-4);
+        // Clear around the take-off point.
+        assert!(!w.collides(Vec3::new(0.0, 4.0, 0.0), 3.5));
+        // The door, the porch and the building's passage are open at 1.5 m.
+        assert!(!w.collides(Vec3::new(-22.0, 2.0, -13.0), 0.4));
+        assert!(!w.collides(Vec3::new(-22.0, 2.0, -11.5), 0.4));
+        assert!(!w.collides(Vec3::new(26.0, 2.5, 8.0), 0.8));
+        // Above the door, the lintel; inside, under the upper floor, room to fly.
+        assert!(w.collides(Vec3::new(-22.0, 3.5, -13.0), 0.2));
+        assert!(!w.collides(Vec3::new(-20.0, 2.0, -18.0), 0.4));
+        // Wind blows over open ground.
+        let open = w.wind_at(Vec3::new(0.0, 10.0, -50.0), 0.0);
+        assert!(open.length() > 2.0, "{open}");
+    }
+
+    #[test]
+    fn shipped_maps_build() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps");
+        let mut n = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "ron") {
+                let spec = WorldSpec::from_ron(&std::fs::read_to_string(&path).unwrap())
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                World::build(&spec).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                n += 1;
+            }
+        }
+        assert!(n >= 6);
     }
 
     #[test]

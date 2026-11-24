@@ -187,6 +187,7 @@ mod tests {
             cell_m: 2.0,
             terrain: TerrainSpec::Flat { height: 0.0 },
             obstacles: ObstaclesSpec::City(spec),
+            wind: Default::default(),
         })
         .unwrap()
     }

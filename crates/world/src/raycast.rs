@@ -116,7 +116,60 @@ fn ray_obstacle(o: &Obstacle, origin: Vec3, dir: Vec3, max: f32) -> Option<Hit> 
             ray_box(center, Quat::from_rotation_y(o.yaw), size / 2.0, origin, dir, max)
         }
         ObstacleShape::Cylinder { radius, height } => ray_cylinder(o.base, radius, height, origin, dir, max),
+        ObstacleShape::Roof { size } => {
+            let rot = Quat::from_rotation_y(o.yaw);
+            let inv = rot.inverse();
+            let (lo, ld) = (inv * (origin - o.base), inv * dir);
+            ray_convex(&roof_planes(size), lo, ld, max).map(|(t, n)| Hit {
+                distance: t,
+                point: origin + dir * t,
+                normal: rot * n,
+            })
+        }
     }
+}
+
+/// Faces of a gable roof in its frame (base center at the origin), as half-spaces
+/// `n·p <= d` with unit `n`: floor, two gable ends, two slopes.
+pub(crate) fn roof_planes(size: Vec3) -> [(Vec3, f32); 5] {
+    let (hx, h, hz) = (size.x / 2.0, size.y, size.z / 2.0);
+    let slope = |s: f32| {
+        let n = Vec3::new(0.0, 1.0, s * h / hz);
+        let len = n.length();
+        (n / len, h / len)
+    };
+    [(Vec3::NEG_Y, 0.0), (Vec3::X, hx), (Vec3::NEG_X, hx), slope(1.0), slope(-1.0)]
+}
+
+/// Ray against a convex polyhedron (Cyrus-Beck clipping). Returns the distance and
+/// the outward normal of the entry face; distance 0 if the origin is inside.
+fn ray_convex(planes: &[(Vec3, f32)], origin: Vec3, dir: Vec3, max: f32) -> Option<(f32, Vec3)> {
+    let (mut t_in, mut t_out) = (0.0_f32, max);
+    let mut normal = -dir;
+    for &(n, d) in planes {
+        let dist = d - n.dot(origin);
+        let rate = n.dot(dir);
+        if rate.abs() < 1e-9 {
+            if dist < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = dist / rate;
+        if rate < 0.0 {
+            // Entering through this face.
+            if t > t_in {
+                t_in = t;
+                normal = n;
+            }
+        } else {
+            t_out = t_out.min(t);
+        }
+        if t_in > t_out {
+            return None;
+        }
+    }
+    Some((t_in, normal))
 }
 
 /// Oriented box: move into its frame, then slab method.
@@ -223,6 +276,7 @@ mod tests {
             cell_m: 1.0,
             terrain: TerrainSpec::Flat { height: 0.0 },
             obstacles: ObstaclesSpec::List(obstacles),
+            wind: Default::default(),
         })
         .unwrap()
     }
@@ -262,6 +316,7 @@ mod tests {
             x: 10.0,
             z: 0.0,
             yaw_deg: 0.0,
+            elevation_m: 0.0,
         }]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::X, 50.0).unwrap();
         assert!(close(h.distance, 9.0));
@@ -277,6 +332,7 @@ mod tests {
             x: 10.0,
             z: 0.0,
             yaw_deg: 45.0,
+            elevation_m: 0.0,
         }]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::X, 50.0).unwrap();
         assert!(close(h.distance, 10.0 - 2f32.sqrt()), "{}", h.distance);
@@ -289,6 +345,7 @@ mod tests {
             x: 0.0,
             z: -10.0,
             yaw_deg: 0.0,
+            elevation_m: 0.0,
         }]);
         let side = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z, 50.0).unwrap();
         assert!(close(side.distance, 9.0));
@@ -299,12 +356,40 @@ mod tests {
     }
 
     #[test]
+    fn hits_roof_slope_and_passes_beside_the_ridge() {
+        let w = world(vec![ObstacleSpec {
+            shape: ObstacleShape::Roof { size: Vec3::new(10.0, 3.0, 6.0) },
+            x: 0.0,
+            z: 0.0,
+            yaw_deg: 0.0,
+            elevation_m: 4.0,
+        }]);
+        // Straight down onto the ridge: top at 4 + 3 = 7 m.
+        let h = w.raycast(Vec3::new(0.0, 20.0, 0.0), Vec3::NEG_Y, 50.0).unwrap();
+        assert!(close(h.distance, 13.0), "{}", h.distance);
+        // Halfway down the slope: 4 + 1.5 m, normal leaning towards +Z.
+        let h = w.raycast(Vec3::new(1.0, 20.0, 1.5), Vec3::NEG_Y, 50.0).unwrap();
+        assert!(close(h.point.y, 5.5), "{}", h.point.y);
+        assert!(h.normal.z > 0.3 && h.normal.y > 0.5);
+        // Under the roof (elevated): the ray reaches the ground.
+        let h = w.raycast(Vec3::new(-10.0, 2.0, 0.0), Vec3::X, 50.0);
+        assert!(h.is_none());
+        // Horizontal ray into the gable end.
+        let h = w.raycast(Vec3::new(-10.0, 5.0, 0.0), Vec3::X, 50.0).unwrap();
+        assert!(close(h.distance, 5.0) && close(h.normal.x, -1.0));
+        // Column: halfway down the slope, the roof tops out at 5.5 m.
+        let c = w.column(0.0, 1.5, 5.0, 6.0);
+        assert!(c.matter && c.space);
+    }
+
+    #[test]
     fn nearest_obstacle_wins() {
         let cyl = |z| ObstacleSpec {
             shape: ObstacleShape::Cylinder { radius: 0.5, height: 3.0 },
             x: 0.0,
             z,
             yaw_deg: 0.0,
+            elevation_m: 0.0,
         };
         let w = world(vec![cyl(-20.0), cyl(-8.0)]);
         let h = w.raycast(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z, 50.0).unwrap();

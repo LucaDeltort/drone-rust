@@ -11,6 +11,7 @@ fn flat() -> World {
         cell_m: 2.0,
         terrain: TerrainSpec::Flat { height: 0.0 },
         obstacles: ObstaclesSpec::None,
+        wind: Default::default(),
     })
     .unwrap()
 }

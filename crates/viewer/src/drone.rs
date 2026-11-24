@@ -48,6 +48,12 @@ pub struct SimDrone {
 #[derive(Component)]
 struct FpvCamera;
 
+/// Propeller blade; `dir` = spin direction (diagonal pairs counter-rotate).
+#[derive(Component)]
+struct Blade {
+    dir: f32,
+}
+
 /// Frame and title of the inset, aligned with the onboard camera viewport.
 #[derive(Component)]
 struct FpvFrame;
@@ -67,6 +73,7 @@ impl Plugin for DronePlugin {
                     (toggle_mode, pilot_input, fov_keys),
                     reset_on_rebuild,
                     sync_transform,
+                    spin_blades,
                     chase_camera,
                 )
                     .chain(),
@@ -107,6 +114,7 @@ fn spawn_drone(
     let arm = meshes.add(Cuboid::new(0.36, 0.015, 0.025));
     let rotor = meshes.add(Cylinder::new(0.075, 0.008));
     let nose = meshes.add(Cuboid::new(0.05, 0.03, 0.03));
+    let blade = meshes.add(Cuboid::new(0.15, 0.003, 0.018));
 
     let pitch = spec.camera.pitch_deg.to_radians();
     let mut drone = commands.spawn((
@@ -134,6 +142,17 @@ fn spawn_drone(
         }
         // Front marker (-Z), to read the orientation from outside.
         part(&nose, &nose_mat, Transform::from_translation(Vec3::new(0.0, 0.0, -0.11 * k)));
+        // Propeller blades, spun by `spin_blades`.
+        for (x, z) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+            let pos = Vec3::new(x, 0.0, z) * 0.127 * k + Vec3::Y * 0.028 * k;
+            p.spawn((
+                Mesh3d(blade.clone()),
+                MeshMaterial3d(body_mat.clone()),
+                Transform::from_translation(pos).with_scale(Vec3::splat(k)),
+                layer.clone(),
+                Blade { dir: x * z },
+            ));
+        }
 
         // Onboard camera: at the front, tilted by pitch_deg.
         p.spawn((
@@ -183,9 +202,22 @@ fn vertical_fov(horizontal_deg: f32) -> f32 {
 
 fn toggle_mode(
     input: Res<ButtonInput<KeyCode>>,
+    mut frames: Local<u32>,
     mut mode: ResMut<ControlMode>,
-    mut cams: Query<(&Transform, &mut FreeCameraState), With<OuterCamera>>,
+    mut cams: Query<(&mut Transform, &mut FreeCameraState), With<OuterCamera>>,
 ) {
+    // Non-interactive check: `VIEWER_CAMERA=x,y,z` starts in free camera at that
+    // point, looking at `VIEWER_LOOK_AT=x,y,z` (the origin by default).
+    *frames = frames.saturating_add(1);
+    if *frames == 2
+        && let Some(at) = env_vec3("VIEWER_CAMERA")
+    {
+        *mode = ControlMode::FreeCamera;
+        let target = env_vec3("VIEWER_LOOK_AT").unwrap_or(Vec3::ZERO);
+        for (mut t, _) in &mut cams {
+            *t = Transform::from_translation(at).looking_at(target, Vec3::Y);
+        }
+    }
     if input.just_pressed(KeyCode::Tab) {
         *mode = match *mode {
             ControlMode::Pilot => ControlMode::FreeCamera,
@@ -205,6 +237,11 @@ fn toggle_mode(
     }
 }
 
+fn env_vec3(name: &str) -> Option<Vec3> {
+    let v: Vec<f32> = std::env::var(name).ok()?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    (v.len() == 3).then(|| Vec3::new(v[0], v[1], v[2]))
+}
+
 fn pilot_input(input: Res<ButtonInput<KeyCode>>, mode: Res<ControlMode>, mut cmd: ResMut<PilotCommand>) {
     if *mode != ControlMode::Pilot {
         cmd.0 = Command::default();
@@ -213,6 +250,11 @@ fn pilot_input(input: Res<ButtonInput<KeyCode>>, mode: Res<ControlMode>, mut cmd
     // Non-interactive check (see auto_screenshot): moves forward while turning, at constant altitude.
     if std::env::var_os("VIEWER_AUTOPILOT").is_some() {
         cmd.0 = Command { forward: 1.0, up: 0.0, yaw: 0.25, right: 0.0 };
+        if let Ok(v) = std::env::var("VIEWER_AUTOPILOT")
+            && v == "hover"
+        {
+            cmd.0 = Command::default();
+        }
         return;
     }
     let axis = |pos: KeyCode, neg: KeyCode| input.pressed(pos) as i32 as f32 - input.pressed(neg) as i32 as f32;
@@ -256,10 +298,21 @@ fn reset_on_rebuild(mut rebuilt: MessageReader<WorldRebuilt>, world: Res<Current
     }
 }
 
+/// The airframe tilts with its thrust: nose down to accelerate, into the wind to
+/// hold still.
 fn sync_transform(mut drones: Query<(&SimDrone, &mut Transform)>) {
     for (d, mut t) in &mut drones {
         t.translation = d.state.position;
-        t.rotation = d.state.rotation();
+        t.rotation = d.state.attitude();
+    }
+}
+
+/// Blades spin with the thrust (shown well below the real rate, which would alias).
+fn spin_blades(time: Res<Time>, drones: Query<&SimDrone>, mut blades: Query<(&Blade, &mut Transform)>) {
+    let Ok(d) = drones.single() else { return };
+    let rate = 12.0 + 2.5 * d.state.flight.thrust;
+    for (b, mut t) in &mut blades {
+        t.rotate_local_y(b.dir * rate * time.delta_secs());
     }
 }
 

@@ -31,7 +31,7 @@ fn run(world: &World, spec: &DroneSpec, strategy: Strategy, limit_s: f32) -> Out
         let before = state.position;
         state.step(cmd, &spec.airframe, world, DT);
         distance_m += before.distance(state.position);
-        let hit = world.collides(state.position, spec.airframe.radius);
+        let hit = state.flight.contact;
         // `EXPLORE_TRACE=N`: trace every N hundredths of a second, and at each collision.
         if std::env::var_os("EXPLORE_TRACE").is_some() && ((t * 100.0).round() as i32 % std::env::var("EXPLORE_TRACE").ok().and_then(|v| v.parse().ok()).unwrap_or(50) == 0 || hit && !touching || explorer.status != Status::Exploring) {
             eprintln!("t={t:.2} pos=({:.2},{:.2},{:.2}) v={:.2} target={:?} path={} frontiers={} hit={hit}", state.position.x, state.position.y, state.position.z, state.velocity.length(), explorer.target, explorer.path.len(), explorer.frontiers.len());

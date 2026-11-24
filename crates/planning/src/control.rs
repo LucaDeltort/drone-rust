@@ -11,30 +11,45 @@ use crate::grid;
 const OCCUPIED_MARGIN_M: f32 = 0.15;
 /// Margin in front of an unknown cell, in m.
 const UNKNOWN_MARGIN_M: f32 = 0.05;
+/// Response time of the airframe, in s: before braking, a quadrotor must first
+/// swing its tilt to the other side. Meanwhile it keeps its speed.
+const RESPONSE_S: f32 = 0.2;
 
 /// Vertical command holding the altitude (proportional controller).
 pub fn hold_altitude(altitude: f32, state: &DroneState, airframe: &Airframe) -> f32 {
     ((altitude - state.position.y) * 2.0 / airframe.max_speed).clamp(-1.0, 1.0)
 }
 
+/// Distance at which `safe_velocity` looks for obstacles: a stop from full speed
+/// (reaction, then braking at 70 %), plus margins.
+pub fn safe_horizon(airframe: &Airframe) -> f32 {
+    let vmax = airframe.max_speed;
+    vmax * RESPONSE_S + vmax.powi(2) / (2.0 * 0.7 * airframe.max_accel) + airframe.radius + OCCUPIED_MARGIN_M + 0.5
+}
+
 /// Safe speed: the component pointing towards each nearby obstacle (or the unknown,
 /// which may hide one) stays low enough to stop before touching it,
 /// v·n ≤ √(2·a·(distance − radius)). Following a wall stays possible at full speed.
 pub fn safe_velocity(grid: &OccupancyGrid, state: &DroneState, airframe: &Airframe, wanted: Vec2) -> Vec2 {
-    let a = airframe.max_accel;
     let pos = Vec2::new(state.position.x, state.position.z);
-    let horizon = airframe.max_speed.powi(2) / (2.0 * a) + airframe.radius + 0.5;
     // Unknown inside the body itself is ignored (the drone is there).
-    let obstacles = grid::obstacles_near(grid, pos, horizon, airframe.radius - UNKNOWN_MARGIN_M);
-    // Margins: 70 % of the max deceleration (command delay, direction of the
-    // obstacle turning); 0.15 m in front of a known obstacle (distance measured in
-    // cells), 0.05 m in front of the unknown (maybe nothing): the drone can skirt
-    // closely what it has not seen, without ever entering it.
-    let limit = |o: &grid::Near| {
-        let margin = if o.occupied { OCCUPIED_MARGIN_M } else { UNKNOWN_MARGIN_M };
-        (2.0 * 0.7 * a * (o.distance - airframe.radius - margin).max(0.0)).sqrt()
-    };
+    let obstacles = grid::obstacles_near(grid, pos, safe_horizon(airframe), airframe.radius - UNKNOWN_MARGIN_M);
+    limit_velocity(&obstacles, state, airframe, wanted, 0.0)
+}
+
+/// Caps `wanted` against `obstacles`, keeping `extra_m` more than the default margins.
+/// Margins: 70 % of the max deceleration (command delay, direction of the obstacle
+/// turning); 0.15 m in front of a known obstacle (distance measured in cells),
+/// 0.05 m in front of the unknown (maybe nothing): the drone can skirt closely
+/// what it has not seen, without ever entering it.
+pub fn limit_velocity(obstacles: &[grid::Near], state: &DroneState, airframe: &Airframe, wanted: Vec2, extra_m: f32) -> Vec2 {
+    let a = airframe.max_accel;
     let v_now = Vec2::new(state.velocity.x, state.velocity.z);
+    let limit = |o: &grid::Near| {
+        let margin = if o.occupied { OCCUPIED_MARGIN_M + extra_m } else { UNKNOWN_MARGIN_M };
+        let reaction = v_now.dot(o.dir).max(0.0) * RESPONSE_S;
+        (2.0 * 0.7 * a * (o.distance - airframe.radius - margin - reaction).max(0.0)).sqrt()
+    };
     let mut v2 = wanted;
     if obstacles.iter().any(|o| v_now.dot(o.dir) > limit(o)) {
         // Already too fast towards an obstacle (momentum from before a heading change):
@@ -44,7 +59,7 @@ pub fn safe_velocity(grid: &OccupancyGrid, state: &DroneState, airframe: &Airfra
     }
     // Successive projections onto each constraint v·n ≤ limit(d).
     for _ in 0..3 {
-        for o in &obstacles {
+        for o in obstacles {
             let excess = v2.dot(o.dir) - limit(o);
             if excess > 0.0 {
                 v2 -= o.dir * excess;

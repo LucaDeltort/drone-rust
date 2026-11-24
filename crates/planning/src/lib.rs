@@ -7,11 +7,13 @@
 pub mod control;
 pub mod dstar;
 pub mod explorer;
+pub mod flight3d;
 pub mod frontier;
 pub mod grid;
 pub mod navigator;
 pub mod trajectory;
 
 pub use explorer::{Explorer, ExplorerConfig, Status, Strategy};
+pub use flight3d::{Flight3d, Flight3dConfig};
 pub use navigator::{NavStatus, Navigator, NavigatorConfig};
 pub use trajectory::Trajectory;

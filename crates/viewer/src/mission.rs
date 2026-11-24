@@ -31,6 +31,8 @@ pub struct Mission {
     pub distance_m: f32,
     /// Obstacles added during the session (for display).
     pub dropped: u32,
+    /// Distance kept from obstacles, beyond the drone's radius, in m.
+    pub clearance_m: f32,
 }
 
 impl Mission {
@@ -54,6 +56,7 @@ impl Plugin for MissionPlugin {
             finished_in: None,
             distance_m: 0.0,
             dropped: 0,
+            clearance_m: crate::explore::DEFAULT_CLEARANCE_M,
         })
         .add_systems(FixedUpdate, navigate.before(step_drone))
         .add_systems(Update, (keys, pick_goal, drop_obstacle, reset_on_rebuild, draw))
@@ -65,7 +68,8 @@ impl Plugin for MissionPlugin {
 pub fn start(mission: &mut Mission, ex: &mut Exploration, map: &Map, config: &DroneConfig) {
     ex.explorer = None;
     let altitude = (map.grid.y_lo + map.grid.y_hi) / 2.0;
-    let cfg = NavigatorConfig::new(&config.0.airframe);
+    let mut cfg = NavigatorConfig::new(&config.0.airframe);
+    cfg.inflate_m = config.0.airframe.radius + mission.clearance_m;
     mission.navigator = Some(Navigator::new(cfg, altitude, mission.goal));
     mission.elapsed = 0.0;
     mission.planned = None;
@@ -144,7 +148,7 @@ fn drop_obstacle(
     mission.dropped += 1;
 }
 
-fn navigate(
+pub fn navigate(
     time: Res<Time>,
     mut mission: ResMut<Mission>,
     map: Res<Map>,

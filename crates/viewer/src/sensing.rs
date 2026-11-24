@@ -65,6 +65,9 @@ fn clear_on_rebuild(mut rebuilt: MessageReader<WorldRebuilt>, mut suites: Query<
     }
 }
 
+/// Beyond this many beams, a measurement is drawn as thinned-out points.
+const DENSE: usize = 1500;
+
 /// Hit color: green near, yellow at mid-range, red at the limit.
 fn range_color(d: f32, max: f32) -> Color {
     let k = (d / max).clamp(0.0, 1.0);
@@ -80,6 +83,17 @@ fn draw_rays(view: Res<DebugView>, suites: Query<&Suite>, mut gizmos: Gizmos) {
         for m in suite.0.latest.iter().flatten() {
             let Measurement { origin, rotation, data, .. } = m;
             match data {
+                Data::Scan { beams, max_range } | Data::DepthImage { beams, max_range, .. } if beams.len() > DENSE => {
+                    // Point cloud (3D lidar): hit points only, thinned out, or the
+                    // rays hide the scene.
+                    let stride = beams.len().div_ceil(DENSE);
+                    for b in beams.iter().step_by(stride) {
+                        if let Some(d) = b.range {
+                            let p = *origin + *rotation * b.dir * d;
+                            gizmos.line(p - Vec3::Y * 0.06, p + Vec3::Y * 0.06, range_color(d, *max_range));
+                        }
+                    }
+                }
                 Data::Scan { beams, max_range } | Data::DepthImage { beams, max_range, .. } => {
                     for b in beams {
                         let dir = *rotation * b.dir;
