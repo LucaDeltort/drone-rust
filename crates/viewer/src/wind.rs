@@ -2,7 +2,7 @@
 //! drone, and an arrow showing the wind it feels.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use world::WindSpec;
 use world::rng::SplitMix64;
 
@@ -16,7 +16,7 @@ const BOX_M: f32 = 18.0;
 const LIFE_S: f32 = 3.0;
 
 #[derive(Resource)]
-struct Streaks {
+pub struct Streaks {
     show: bool,
     points: Vec<(Vec3, f32)>,
     rng: SplitMix64,
@@ -28,7 +28,7 @@ impl Plugin for WindPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Streaks { show: true, points: Vec::new(), rng: SplitMix64::new(17) })
             .add_systems(Update, (advect, draw).chain())
-            .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -84,14 +84,9 @@ fn draw(s: Res<Streaks>, world: Res<CurrentWorld>, drones: Query<&SimDrone>, mut
     }
 }
 
-fn panel(mut contexts: EguiContexts, mut world: ResMut<CurrentWorld>, mut s: ResMut<Streaks>, drones: Query<&SimDrone>) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    let r = ctx.content_rect();
-    egui::Window::new("Wind")
-        .default_pos([r.width() * 0.37, r.height() * 0.25])
-        .resizable(false)
-        .default_open(false)
-        .show(ctx, |ui| {
+/// Wind section of the side panel.
+pub fn panel(ui: &mut egui::Ui, world: &mut CurrentWorld, s: &mut Streaks, drone: Option<&SimDrone>) {
+
             let mut spec: WindSpec = *world.0.wind.spec();
             let before = spec;
             ui.add(egui::Slider::new(&mut spec.speed_ms, 0.0..=20.0).text("mean speed at 10 m (m/s)"));
@@ -113,7 +108,7 @@ fn panel(mut contexts: EguiContexts, mut world: ResMut<CurrentWorld>, mut s: Res
                 world.0.wind.set(spec);
             }
             ui.checkbox(&mut s.show, "Show the airflow");
-            if let Ok(d) = drones.single() {
+            if let Some(d) = drone {
                 let w = d.state.flight.wind;
                 let (pitch, roll) = d.state.tilt();
                 ui.label(format!(
@@ -127,6 +122,4 @@ fn panel(mut contexts: EguiContexts, mut world: ResMut<CurrentWorld>, mut s: Res
                     .on_hover_text("integral of the velocity loop: the steady push it leans against");
             }
             ui.label("Downwind of buildings the wind drops and gets gustier.");
-        });
-    Ok(())
 }

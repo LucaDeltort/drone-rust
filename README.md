@@ -60,21 +60,19 @@ You can combine options. Bevy is slow in debug builds, so use `--release` in cit
 | Missions | `X` exploration · `B` place B under the cursor · `G` go to B (start/stop) · `O` drop a wall in front of the drone |
 | 3D map | `M` show/hide the voxel map · `V` show/hide the real world |
 
-### Panels
+### Layout
 
-- **Sensors**: latest measurement of each sensor, with noise controls. The panel scrolls when the list is long.
-- **Map**: top-down occupancy grid (free / occupied / unknown), the slab altitude, and how well the map matches the terrain.
-- **Exploration**: strategy, status, distance travelled, known area, collisions.
-- **Mission A -> B**: goal, status, predicted and remaining time, distance travelled, D* Lite statistics.
-- **Pose**: pose mode, real error and announced uncertainty, scan matching on/off. In EKF mode, a magenta ghost shows where the drone *believes* it is, with a 2σ circle.
-- **Wind** (collapsed, movable): mean speed and direction, gusts, turbulence, presets
-  (calm, breeze, storm), the airflow streaks, and the wind the drone feels.
-- **3D map & flight** (movable): voxel count, show/hide, clear; 3D flight on/off,
-  height above surfaces, tallest obstacle to fly over, and the distance kept from
-  walls (applied at the next mission start).
-- An inset shows the onboard camera view. The camera is fixed to the airframe, so
-  the horizon tilts when the drone does.
-- The HUD shows the tilt (pitch, roll), the thrust and the wind felt.
+Blender style: the 3D view in the middle, the settings docked around it, never over it.
+
+- **Left panel**: Mission A -> B, Exploration, 3D map & flight, Wind, Pose.
+- **Right panel**: onboard view (the camera is fixed to the airframe, so the horizon
+  tilts when the drone does), Map (top-down occupancy grid and its consistency with the
+  terrain), Sensors (latest measurements, noise controls).
+- **Top right of the 3D view**: telemetry as text: speed, altitude, heading, pitch,
+  roll, thrust, wind felt.
+- **Status bar**: world source and the keys of the current mode.
+
+Sections collapse, and both panels can be resized by dragging their edge.
 
 ## Maps
 

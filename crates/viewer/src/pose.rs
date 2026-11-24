@@ -6,7 +6,7 @@
 //! believes it is, surrounded by a 2σ circle (uncertainty announced by the filter).
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use estimation::{Ekf, EkfConfig};
 use sim::{PoseMode, sensors_for};
 use world::drone::DroneState;
@@ -74,7 +74,7 @@ impl Plugin for PosePlugin {
         app.insert_resource(Estimator::new(self.0))
             .add_systems(FixedUpdate, estimate.after(sense))
             .add_systems(Update, (reset_on_rebuild, draw))
-            .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -167,12 +167,9 @@ fn draw(est: Res<Estimator>, mut gizmos: Gizmos) {
     gizmos.circle(Isometry3d::new(b.position, flat), radius, magenta.with_alpha(0.7));
 }
 
-fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<DroneConfig>) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Pose")
-        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -12.0])
-        .resizable(false)
-        .show(ctx, |ui| {
+/// Pose section of the side panel.
+pub fn panel(ui: &mut egui::Ui, est: &mut Estimator, config: &DroneConfig) {
+
             let mut mode = est.mode;
             ui.horizontal(|ui| {
                 ui.radio_value(&mut mode, PoseMode::Truth, "Truth");
@@ -216,6 +213,4 @@ fn panel(mut contexts: EguiContexts, mut est: ResMut<Estimator>, config: Res<Dro
                 }
             }
             est.scan_match = scan_match;
-        });
-    Ok(())
 }

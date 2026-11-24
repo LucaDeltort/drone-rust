@@ -1,7 +1,7 @@
 //! Sensors in the viewer: fixed-step measurements, rays as gizmos, egui settings.
 
 use bevy::{camera::visibility::RenderLayers, prelude::*};
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use sensors::{Data, Measurement, Pose, SensorSuite};
 
 use crate::{
@@ -16,7 +16,7 @@ pub const SENSOR_SEED: u64 = 0x5EED;
 pub struct Suite(pub SensorSuite);
 
 #[derive(Resource)]
-struct DebugView {
+pub struct DebugView {
     rays: bool,
     misses: bool,
 }
@@ -30,7 +30,7 @@ impl Plugin for SensingPlugin {
             .add_systems(PostStartup, attach_suite)
             .add_systems(FixedUpdate, sense.after(step_drone))
             .add_systems(Update, (clear_on_rebuild, draw_rays).chain())
-            .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -132,29 +132,16 @@ fn draw_rays(view: Res<DebugView>, suites: Query<&Suite>, mut gizmos: Gizmos) {
     }
 }
 
-fn panel(
-    mut contexts: EguiContexts,
-    mut view: ResMut<DebugView>,
-    mut fov: ResMut<FpvFov>,
-    mut suites: Query<&mut Suite>,
-) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    // Height capped at half the screen (scrolling beyond): the panel does not
-    // cover the onboard view, at the bottom right.
-    let max_height = ctx.content_rect().height() * 0.5;
-    egui::Window::new("Sensors")
-        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
-        .resizable(false)
-        .vscroll(true)
-        .max_height(max_height)
-        .show(ctx, |ui| {
+/// Sensors section of the side panel.
+pub fn panel(ui: &mut egui::Ui, view: &mut DebugView, fov: &mut FpvFov, suites: &mut Query<&mut Suite>) {
+
             ui.checkbox(&mut view.rays, "Show rays");
             ui.add_enabled(view.rays, egui::Checkbox::new(&mut view.misses, "Show rays without return"));
             let mut f = fov.0;
             if ui.add(egui::Slider::new(&mut f, 30.0..=150.0).text("Onboard camera FOV (°)")).changed() {
                 fov.0 = f;
             }
-            for mut suite in &mut suites {
+            for mut suite in suites.iter_mut() {
                 let SensorSuite { sensors, latest, .. } = &mut suite.0;
                 if sensors.is_empty() {
                     ui.label("This drone has no sensor.");
@@ -174,8 +161,6 @@ fn panel(
                     });
                 }
             }
-        });
-    Ok(())
 }
 
 /// Readable summary of the last measurement.

@@ -16,7 +16,7 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use drone_spec::SensorKind;
 use mapping::{Key, VoxelMap};
 use planning::{Flight3d, Flight3dConfig};
@@ -37,7 +37,7 @@ const VOXEL_M: f32 = 0.4;
 const REDRAW_S: f32 = 0.5;
 
 #[derive(Resource)]
-struct Map3d {
+pub struct Map3d {
     map: VoxelMap,
     last_t: Vec<f64>,
     drawn: Option<u64>,
@@ -61,7 +61,7 @@ impl Plugin for Map3dPlugin {
         app.add_systems(Startup, setup)
             .add_systems(FixedUpdate, (integrate.after(estimate), guard.after(explore).after(navigate).before(step_drone)))
             .add_systems(Update, (reset_on_rebuild, keys, redraw).chain())
-            .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -279,20 +279,9 @@ fn redraw(
     let _ = meshes.insert(&m3.mesh, mesh);
 }
 
-fn panel(
-    mut contexts: EguiContexts,
-    mut m3: ResMut<Map3d>,
-    mut ex: ResMut<Exploration>,
-    mut mission: ResMut<Mission>,
-) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    let r = ctx.content_rect();
-    let m3 = m3.as_mut();
-    egui::Window::new("3D map & flight")
-        .default_pos([r.width() * 0.37, r.height() * 0.25])
-        .resizable(false)
-        .default_open(true)
-        .show(ctx, |ui| {
+/// 3D map and flight section of the side panel.
+pub fn panel(ui: &mut egui::Ui, m3: &mut Map3d, ex: &mut Exploration, mission: &mut Mission) {
+
             ui.checkbox(&mut m3.show, "Show the voxel map (M)");
             ui.checkbox(&mut m3.show_world, "Show the real world (V)");
             let c = m3.map.counts();
@@ -332,6 +321,4 @@ fn panel(
             if let Some(t) = m3.flight.target {
                 ui.label(format!("Target altitude: {t:.1} m"));
             }
-        });
-    Ok(())
 }

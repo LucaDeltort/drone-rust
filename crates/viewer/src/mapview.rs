@@ -8,7 +8,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
+use bevy_egui::egui;
 use mapping::{Agreement, Cell, Counts, OccupancyGrid};
 
 use crate::{
@@ -29,7 +29,7 @@ const AGREEMENT_S: f32 = 2.0;
 #[derive(Resource)]
 pub struct Map {
     pub grid: OccupancyGrid,
-    image: Handle<Image>,
+    pub image: Handle<Image>,
     /// Time of the last integrated measurement, per sensor.
     last_t: Vec<f64>,
     dirty: bool,
@@ -41,14 +41,14 @@ pub struct Map {
 }
 
 #[derive(Resource)]
-struct MapSettings {
+pub struct MapSettings {
     overlay: bool,
     /// Altitude of the slab above the ground at the origin (starting point), in m.
     altitude: f32,
 }
 
 #[derive(Component)]
-struct MapOverlay;
+pub struct MapOverlay;
 
 pub struct MapPlugin;
 
@@ -80,7 +80,7 @@ impl Plugin for MapPlugin {
             .add_systems(Startup, create_map)
             .add_systems(FixedUpdate, integrate.after(estimate))
             .add_systems(Update, (reset_on_rebuild, redraw, measure_agreement).chain())
-            .add_systems(EguiPrimaryContextPass, panel);
+            ;
     }
 }
 
@@ -287,24 +287,21 @@ fn measure_agreement(time: Res<Time>, mut timer: Local<f32>, mut map: ResMut<Map
     map.agreement = Some(a);
 }
 
-fn panel(
-    mut contexts: EguiContexts,
-    mut map: ResMut<Map>,
-    mut settings: ResMut<MapSettings>,
-    mut overlays: Query<&mut Visibility, With<MapOverlay>>,
-    drones: Query<&SimDrone>,
-    exploration: Res<crate::explore::Exploration>,
-) -> Result {
-    let texture = contexts.add_image(EguiTextureHandle::Strong(map.image.clone()));
-    let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Map")
-        .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -12.0])
-        .resizable(false)
-        .show(ctx, |ui| {
+/// Map section of the side panel.
+pub fn panel(
+    ui: &mut egui::Ui,
+    map: &mut Map,
+    settings: &mut MapSettings,
+    overlays: &mut Query<&mut Visibility, With<MapOverlay>>,
+    drone: Option<&SimDrone>,
+    exploration: &crate::explore::Exploration,
+    texture: egui::TextureId,
+) {
+
             let mut overlay = settings.overlay;
             if ui.checkbox(&mut overlay, "Show the map in the scene").changed() {
                 settings.overlay = overlay;
-                for mut v in &mut overlays {
+                for mut v in overlays.iter_mut() {
                     *v = if overlay { Visibility::Inherited } else { Visibility::Hidden };
                 }
             }
@@ -323,7 +320,7 @@ fn panel(
             let (lo, hi) = (map.grid.y_lo, map.grid.y_hi);
             if map.projected {
                 ui.label("3D flight: obstacles too tall to fly over (from the 3D map)");
-            } else if let Ok(d) = drones.single() {
+            } else if let Some(d) = drone {
                 let y = d.state.position.y;
                 if (lo..=hi).contains(&y) {
                     ui.label(format!("Drone in the slab ({lo:.1} to {hi:.1} m)"));
@@ -359,7 +356,7 @@ fn panel(
             let response = ui.image((texture, egui::vec2(side, side)));
             let rect = response.rect;
             ui.painter().rect_stroke(rect, 0.0, (1.0, egui::Color32::GRAY), egui::StrokeKind::Outside);
-            if let Ok(d) = drones.single() {
+            if let Some(d) = drone {
                 let (nx, _) = map.grid.size();
                 let extent = nx as f32 * map.grid.cell_m();
                 let to_ui = |p: Vec3| {
@@ -382,6 +379,4 @@ fn panel(
                 ui.painter().circle_filled(pos, 4.0, egui::Color32::from_rgb(255, 140, 0));
                 ui.painter().line_segment([pos, nose], (2.0, egui::Color32::from_rgb(255, 140, 0)));
             }
-        });
-    Ok(())
 }

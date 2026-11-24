@@ -2,7 +2,7 @@
 //! control panel, collision counter.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use planning::{Explorer, ExplorerConfig, Status, Strategy};
 
 use crate::{
@@ -56,7 +56,7 @@ impl Plugin for ExplorePlugin {
         })
         .add_systems(FixedUpdate, (explore.before(step_drone), count_collisions.after(step_drone)))
         .add_systems(Update, (toggle_key, reset_on_rebuild, draw_plan))
-        .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -157,18 +157,9 @@ fn draw_plan(ex: Res<Exploration>, drones: Query<&SimDrone>, mut gizmos: Gizmos)
     }
 }
 
-fn panel(
-    mut contexts: EguiContexts,
-    mut ex: ResMut<Exploration>,
-    mut mission: ResMut<Mission>,
-    map: Res<Map>,
-    config: Res<DroneConfig>,
-) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Exploration")
-        .anchor(egui::Align2::LEFT_TOP, [12.0, 120.0])
-        .resizable(false)
-        .show(ctx, |ui| {
+/// Exploration section of the side panel.
+pub fn panel(ui: &mut egui::Ui, ex: &mut Exploration, mission: &mut Mission, map: &Map, config: &DroneConfig) {
+
             let running = ex.active();
             ui.add_enabled_ui(!running, |ui| {
                 ui.horizontal(|ui| {
@@ -187,7 +178,7 @@ fn panel(
                 if running {
                     ex.explorer = None;
                 } else {
-                    start(&mut ex, &mut mission, &map, &config);
+                    start(ex, mission, map, config);
                 }
             }
 
@@ -200,7 +191,7 @@ fn panel(
             if ex.active() {
                 ui.label(format!("Distance travelled: {:.0} m", ex.distance_m));
             }
-            let c = map_counts(&map);
+            let c = map_counts(map);
             ui.label(format!("Known area: {:.0} m² ({:.1} % of the map)", c.0, c.1));
             let text = format!("Collisions: {}", ex.collisions);
             if ex.collisions == 0 {
@@ -208,8 +199,6 @@ fn panel(
             } else {
                 ui.colored_label(egui::Color32::from_rgb(255, 90, 70), text);
             }
-        });
-    Ok(())
 }
 
 /// Known area (free + occupied) in m², and in % of the map.

@@ -1,7 +1,7 @@
 //! Drone in Bevy: keyboard piloting, fixed-step simulation, cameras.
 
 use bevy::{
-    camera::{Viewport, visibility::RenderLayers},
+    camera::visibility::RenderLayers,
     camera_controller::free_camera::FreeCameraState,
     prelude::*,
 };
@@ -20,7 +20,7 @@ const SIM_HZ: f64 = 100.0;
 const SPAWN_ALTITUDE: f32 = 2.0;
 
 /// Aspect ratio of the onboard camera inset.
-const FPV_ASPECT: f32 = 16.0 / 9.0;
+pub const FPV_ASPECT: f32 = 16.0 / 9.0;
 
 #[derive(Resource)]
 pub struct DroneConfig(pub DroneSpec);
@@ -45,8 +45,9 @@ pub struct SimDrone {
     pub state: DroneState,
 }
 
+/// Onboard camera; its viewport is the slot of the right panel.
 #[derive(Component)]
-struct FpvCamera;
+pub struct FpvCamera;
 
 /// Propeller blade; `dir` = spin direction (diagonal pairs counter-rotate).
 #[derive(Component)]
@@ -54,9 +55,6 @@ struct Blade {
     dir: f32,
 }
 
-/// Frame and title of the inset, aligned with the onboard camera viewport.
-#[derive(Component)]
-struct FpvFrame;
 
 pub struct DronePlugin;
 
@@ -78,7 +76,7 @@ impl Plugin for DronePlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (layout_fpv, apply_fov));
+            .add_systems(Update, apply_fov);
     }
 }
 
@@ -158,7 +156,8 @@ fn spawn_drone(
         p.spawn((
             Camera3d::default(),
             Camera {
-                order: 1,
+                // Above egui's camera: drawn into its slot of the right panel.
+                order: 11,
                 ..default()
             },
             Projection::Perspective(PerspectiveProjection {
@@ -170,29 +169,6 @@ fn spawn_drone(
             FpvCamera,
         ));
     });
-
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                border: UiRect::all(px(2)),
-                ..default()
-            },
-            BorderColor::all(Color::WHITE),
-            FpvFrame,
-        ))
-        .with_children(|p| {
-            p.spawn((
-                Text::new("Onboard view"),
-                TextFont::from_font_size(14.0),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(-22),
-                    left: px(0),
-                    ..default()
-                },
-            ));
-        });
 }
 
 /// Horizontal FOV (degrees) to vertical FOV (radians) for the inset aspect ratio.
@@ -335,43 +311,6 @@ fn chase_camera(
     let alpha = 1.0 - (-6.0 * time.delta_secs()).exp();
     cam.translation = cam.translation.lerp(target, alpha);
     cam.look_at(d.state.position + fwd * 2.0, Vec3::Y);
-}
-
-/// Places the inset at the bottom right, a third of the window width.
-fn layout_fpv(
-    windows: Query<&Window>,
-    mut cams: Query<&mut Camera, With<FpvCamera>>,
-    mut frames: Query<&mut Node, With<FpvFrame>>,
-) {
-    let Ok(window) = windows.single() else { return };
-    let size = window.physical_size();
-    if size.x == 0 || size.y == 0 {
-        return;
-    }
-    let margin = (16.0 * window.scale_factor()) as u32;
-    let w = (size.x as f32 / 3.0) as u32;
-    let h = ((w as f32 / FPV_ASPECT) as u32).min(size.y / 2);
-    let pos = UVec2::new(size.x.saturating_sub(w + margin), size.y.saturating_sub(h + margin));
-    let viewport = Viewport {
-        physical_position: pos,
-        physical_size: UVec2::new(w, h),
-        ..default()
-    };
-    for mut cam in &mut cams {
-        if cam.viewport.as_ref().map(|v| (v.physical_position, v.physical_size))
-            != Some((viewport.physical_position, viewport.physical_size))
-        {
-            cam.viewport = Some(viewport.clone());
-        }
-    }
-    // Frame in logical pixels, 2 px around the viewport.
-    let s = window.scale_factor();
-    for mut node in &mut frames {
-        node.left = px(pos.x as f32 / s - 2.0);
-        node.top = px(pos.y as f32 / s - 2.0);
-        node.width = px(w as f32 / s + 4.0);
-        node.height = px(h as f32 / s + 4.0);
-    }
 }
 
 fn apply_fov(fov: Res<FpvFov>, mut cams: Query<&mut Projection, With<FpvCamera>>) {

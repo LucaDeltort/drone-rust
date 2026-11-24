@@ -15,6 +15,7 @@
 //! O = unexpected obstacle in front of the drone.
 //! 3D map: M = show/hide the voxel map, V = show/hide the real world.
 
+mod dock;
 mod drone;
 mod map3d;
 mod wind;
@@ -32,7 +33,7 @@ use bevy::{
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     prelude::*,
 };
-use bevy_egui::{EguiGlobalSettings, EguiPlugin, PrimaryEguiContext};
+use bevy_egui::{EguiGlobalSettings, EguiPlugin};
 use drone_spec::DroneSpec;
 use world::{World as SimWorld, WorldSpec};
 
@@ -119,8 +120,6 @@ pub struct WorldRebuilt;
 #[derive(Message)]
 struct Rebuild;
 
-#[derive(Component)]
-struct InfoText;
 
 /// Outside camera (free or chasing the drone).
 #[derive(Component)]
@@ -157,8 +156,8 @@ fn main() {
         }))
         .add_plugins(FreeCameraPlugin)
         .add_plugins(EguiPlugin::default())
-        // egui context set by hand on the outside camera (not on the onboard
-        // camera); egui keeps the keyboard and mouse when it needs them.
+        // egui context set by hand on its own camera (see `dock`); egui keeps the
+        // keyboard and mouse when it needs them.
         .insert_resource(EguiGlobalSettings {
             auto_create_primary_context: false,
             enable_absorb_bevy_input_system: true,
@@ -166,7 +165,7 @@ fn main() {
         })
         .add_plugins((DronePlugin, sensing::SensingPlugin, mapview::MapPlugin, explore::ExplorePlugin, mission::MissionPlugin))
         .add_plugins(pose::PosePlugin(args.pose))
-        .add_plugins((map3d::Map3dPlugin, wind::WindPlugin))
+        .add_plugins((map3d::Map3dPlugin, wind::WindPlugin, dock::DockPlugin))
         .insert_resource(args.source)
         .insert_resource(CurrentWorld(world))
         .insert_resource(FpvFov(args.drone.camera.fov_deg))
@@ -206,20 +205,7 @@ fn setup(mut commands: Commands) {
             ..default()
         },
         RenderLayers::from_layers(&[0, drone::DRONE_LAYER]),
-        IsDefaultUiCamera,
-        PrimaryEguiContext,
         OuterCamera,
-    ));
-    commands.spawn((
-        Text::new(""),
-        TextFont::from_font_size(15.0),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
-            ..default()
-        },
-        InfoText,
     ));
 }
 
@@ -284,7 +270,7 @@ fn hud(
     config: Res<DroneConfig>,
     world: Res<CurrentWorld>,
     drones: Query<&drone::SimDrone>,
-    mut info: Query<&mut Text, With<InfoText>>,
+    mut hud_text: ResMut<dock::HudText>,
 ) {
     let Ok(d) = drones.single() else { return };
     let s = &d.state;
@@ -292,34 +278,41 @@ fn hud(
     let heading = (360.0 - s.yaw.to_degrees()).rem_euclid(360.0);
     let controls = match *mode {
         ControlMode::Pilot => {
-            "PILOT (Tab: free camera)\nW/S forward/backward, A/D left/right, Space/Shift up/down, Q/E yaw"
+            "PILOT (Tab: free camera) · W/S forward/backward · A/D left/right · Space/Shift up/down · Q/E yaw · \
+             X explore · B place B · G go to B · M 3D map · V real world · [ ] FOV"
         }
         ControlMode::FreeCamera => {
-            "FREE CAMERA (Tab: pilot)\nright click + mouse, WASD, Q/E, Shift, wheel"
+            "FREE CAMERA (Tab: pilot) · right click + mouse · WASD · Q/E · Shift · wheel · \
+             X explore · B place B · G go to B · M 3D map · V real world"
         }
     };
     let (pitch, roll) = s.tilt();
     let wind = s.flight.wind;
     let thrust = 100.0 * s.flight.thrust / (config.0.airframe.thrust_to_weight * world::drone::G);
     let text = format!(
-        "{}\n{}: {:.1} m/s, altitude {:.1} m, heading {:.0} deg, FOV {:.0} deg ([ and ])\n\
-         pitch {:+.0} deg, roll {:+.0} deg, thrust {:.0} %, wind {:.1} m/s{}\n{controls}",
-        status.0,
+        "{}\n{:5.1} m/s   alt {:5.1} m   hdg {:3.0}°\n\
+         pitch {:+3.0}°  roll {:+3.0}°  thrust {:3.0} %\n\
+         wind {:4.1} m/s   FOV {:.0}°{}",
         config.0.name,
         s.velocity.length(),
         s.altitude(&world.0),
         heading,
-        fov.0,
         pitch.to_degrees(),
         roll.to_degrees(),
         thrust,
         wind.length(),
-        if s.flight.contact { "  CONTACT" } else { "" },
+        fov.0,
+        if s.flight.contact { "\nCONTACT" } else { "" },
     );
-    for mut t in &mut info {
-        if t.0 != text {
-            t.0.clone_from(&text);
-        }
+    let hud = hud_text.as_mut();
+    if hud.telemetry != text {
+        hud.telemetry = text;
+    }
+    if hud.status != status.0 {
+        hud.status.clone_from(&status.0);
+    }
+    if hud.controls != controls {
+        hud.controls = controls.to_string();
     }
 }
 

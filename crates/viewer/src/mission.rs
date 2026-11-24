@@ -5,7 +5,7 @@
 //! O = make an obstacle appear in front of the drone.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::egui;
 use planning::{NavStatus, Navigator, NavigatorConfig};
 use world::ObstacleShape;
 
@@ -60,7 +60,7 @@ impl Plugin for MissionPlugin {
         })
         .add_systems(FixedUpdate, navigate.before(step_drone))
         .add_systems(Update, (keys, pick_goal, drop_obstacle, reset_on_rebuild, draw))
-        .add_systems(EguiPrimaryContextPass, panel);
+;
     }
 }
 
@@ -209,18 +209,9 @@ fn draw(mission: Res<Mission>, world: Res<CurrentWorld>, drones: Query<&SimDrone
     }
 }
 
-fn panel(
-    mut contexts: EguiContexts,
-    mut mission: ResMut<Mission>,
-    mut ex: ResMut<Exploration>,
-    map: Res<Map>,
-    config: Res<DroneConfig>,
-) -> Result {
-    let ctx = contexts.ctx_mut()?;
-    egui::Window::new("Mission A -> B")
-        .anchor(egui::Align2::CENTER_TOP, [0.0, 12.0])
-        .resizable(false)
-        .show(ctx, |ui| {
+/// A-to-B section of the side panel.
+pub fn panel(ui: &mut egui::Ui, mission: &mut Mission, ex: &mut Exploration, map: &Map, config: &DroneConfig) {
+
             let running = mission.active();
             ui.add_enabled_ui(!running, |ui| {
                 ui.horizontal(|ui| {
@@ -235,7 +226,7 @@ fn panel(
                 if running {
                     mission.navigator = None;
                 } else {
-                    start(&mut mission, &mut ex, &map, &config);
+                    start(mission, ex, map, config);
                 }
             }
             ui.label(format!("Unexpected obstacle in front of the drone: key O ({} placed)", mission.dropped));
@@ -268,6 +259,4 @@ fn panel(
             } else {
                 ui.colored_label(egui::Color32::from_rgb(255, 90, 70), text);
             }
-        });
-    Ok(())
 }
