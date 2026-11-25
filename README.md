@@ -210,70 +210,78 @@ by buildings along the flight (`sky_masked`: GPS satellites lost).
 ## Results
 
 The full matrix has 4 drones × 7 maps × 3 missions × 3 pose modes = 252 runs, with
-seed 1 and the default limits. These results predate the flight dynamics, the wind
-and the sensor realism (fixed mounts, lidar sweep, materials, sonar multipath, urban
-GPS), which lower the scores, mostly with GPS in the cities: rerun the bench to update
-them. The raw data is in [`bench/results.csv`](bench/results.csv).
+seed 1 and the default limits, on the current code: quadrotor dynamics and wind,
+a fixed lidar on the Pro, lidar sweep and deskew, materials, sonar multipath and GPS
+masked by buildings. The raw data is in [`bench/results.csv`](bench/results.csv).
 
 ### Success by mission and pose mode
 
 | Mission | `truth` | `ekf-gps` | `ekf` |
 |---|---|---|---|
-| A → B | 24/28 | 22/28 | 10/28 |
-| Exploration, nearest frontier | 10/28 | 7/28 | 0/28 |
-| Exploration, information gain | 11/28 | 6/28 | 0/28 |
+| A → B | 24/28 | 10/28 | 11/28 |
+| Exploration, nearest frontier | 6/28 | 2/28 | 0/28 |
+| Exploration, information gain | 5/28 | 5/28 | 0/28 |
 
 ### Perfect pose (`truth`), by drone
 
 | Drone | A → B | Exploration (both strategies) | Collisions |
 |---|---|---|---|
-| Scout | 7/7 | 11/14 | 0 |
-| Pro | 6/7 | 8/14 | 0 |
-| Heavy | 6/7 | 2/14 | 0 |
-| Cheap | 5/7 | 0/14 | 38 |
+| Scout | 6/7 | 6/14 | 74 |
+| Pro | 6/7 | 3/14 | 8 |
+| Heavy | 6/7 | 2/14 | 42 |
+| Cheap | 6/7 | 0/14 | 0 |
 
-### Pose error without GPS (`ekf`), by drone
+### GPS (`ekf-gps`), by map
+
+Median RMS pose error over the 12 runs of each map, and mean share of the sky masked
+by buildings along the flights.
+
+| Map | Pose error | Sky masked |
+|---|---|---|
+| `seed42`, `seed7` | 0.46–0.50 m | 5–8 % |
+| `corridor` | 0.53 m | 10 % |
+| `suburbs` | 0.62 m | 14 % |
+| `old-town` | 2.0 m | 52 % |
+| `dense-city` | 2.2 m | 61 % |
+| `downtown` | 2.4 m | 62 % |
+
+### Pose error without GPS (`ekf`, with scan matching), by drone
 
 Median RMS error over the 21 runs of each drone. Scan matching needs a lidar or a
 depth camera; the Cheap only has sonars.
 
-| Drone | Without scan matching | With scan matching | A → B |
-|---|---|---|---|
-| Scout | 34 m | 2.9 m | 5/7 |
-| Pro | 35 m | 1.1 m | 5/7 |
-| Heavy | 34 m | 17 m | 0/7 |
-| Cheap | 67 m | 63 m | 0/7 |
+| Drone | Pose error | A → B |
+|---|---|---|
+| Scout | 2.5 m | 5/7 |
+| Pro | 2.2 m | 5/7 |
+| Heavy | 16 m | 1/7 |
+| Cheap | 80 m | 0/7 |
 
 ### Takeaways
 
-- **With a perfect pose, the lidar drones fly cleanly.**
-  - Scout and Pro have zero collisions on every map, including the four cities.
-  - Their failed explorations are mostly timeouts in the largest maps: the map is
-    correct and 93–98 % covered, but 1200 s is not enough to finish.
-- **The Heavy never collides, but it is slow in cities.**
-  - It is slow (5 m/s) and wide (0.8 m plus margins), and it only sees through a
-    forward depth camera and a downward sonar.
-  - At 1200 s it has mapped about half of downtown and old-town.
-- **Sonars are not enough.**
-  - The Cheap's four sonars miss oblique walls and see little.
-  - Outside the corridor, its coverage stays under 30 %, and only 55–83 % of its
-    occupied cells are correct.
-  - It collides on the hilly procedural maps.
-- **The GPS keeps the estimated pose usable.**
-  - With `ekf-gps`, the median RMS pose error is 0.34 m (0.57 m at most).
-  - A → B does almost as well as with the perfect pose.
-  - Exploration loses some runs: an error of a few tens of centimeters is enough to
-    blur the walls of a narrow street.
-- **Without GPS, scan matching holds the lidar drones to a few meters.**
-  - It brings the median error of the Scout and the Pro from about 35 m down to
-    1–3 m, and A → B from 7 to 10 successes.
-  - The Heavy's depth camera only sees 87° ahead: few matches, so less gain.
-  - No exploration succeeds yet. Open areas, where nothing is in range, still let
-    the IMU drift, and an error of 1–3 m is enough to fail the 90 % map criterion.
-  - The drone sometimes "reaches" B on a map built in the wrong place
-    (`B believed reached (wrong pose)`).
-- **Compute is cheap.** One step (estimation + map + decision) takes 0.34 ms in the
-  median and under 2 ms on average for every run, while all cores are busy.
+- **A → B with a perfect pose holds up**: 24/28, as before the dynamics and the
+  sensor realism.
+- **Explorations mostly run out of time.** 40 of the 56 perfect-pose explorations
+  end on the 1200 s limit. A drone that has to tilt to accelerate and to brake, and
+  waits for its response time, flies the same paths more slowly.
+  - The maps they leave are right (median 100 % of the occupied cells correct for
+    the lidar drones), and the Scout and the Pro cover 92–99 % in the median.
+  - Collisions now appear in long city explorations: one Scout run in downtown
+    counts 71 of the 74 contacts, stuck against a facade; the Heavy, wide and slow,
+    touches walls in the cities and on the hilly procedural maps.
+- **In the cities, the GPS is no longer enough.** With half or more of the sky
+  masked, the median pose error goes from about 0.5 m in the open to 2–2.4 m, and
+  A → B with GPS falls to 10/28: an error of two meters puts B in the wrong street.
+  In the open maps, the GPS keeps the error around half a meter.
+- **Without GPS, scan matching still holds the lidar drones to a couple of meters**
+  (2.2–2.5 m in the median), and A → B reaches 11/28, as many as with a GPS in the
+  cities. No exploration succeeds without GPS: an error of a meter or two is enough
+  to fail the 90 % map criterion.
+- **Sonars are not enough.** With a perfect pose the Cheap never collides, but it
+  covers about a fifth of the free space; with an estimated pose it hits walls (68
+  contacts), and without GPS nor scan matching its pose drifts to tens of meters.
+- **Compute is cheap.** One step (estimation + map + decision; the sensors are not
+  counted) takes 0.23 ms in the median and under 1 ms on average for every run.
 
 ## Architecture
 
