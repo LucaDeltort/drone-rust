@@ -326,7 +326,9 @@ The project is a Cargo workspace with one crate per layer:
 - **Performance.** Lidar and depth rays are cast in parallel (rayon), each with its
   own noise generator so that a run stays deterministic, and the voxel rays are traced
   in parallel then applied in order. Hash maps use FxHash. The viewer remeshes only the
-  16³ chunks of the voxel map that changed.
+  16³ chunks of the voxel map that changed. A ray above the highest point of the relief
+  skips the terrain march (about 40 % off a raycast in a city). A bounding volume
+  hierarchy was tried for the obstacles and dropped: no faster than the 8 m grid index.
 - **Inspection of one structure** (needs 3D flight).
   - From the target point, the structure is found in the drone's own 3D map: the
     voxel columns standing more than 1 m out of the local ground, connected to the

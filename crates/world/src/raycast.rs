@@ -70,8 +70,20 @@ impl World {
             });
         }
         let step = t.cell_m() * 0.5;
+        // Above the highest point, the ray cannot touch the ground: start the march
+        // where it comes down to that height, if it ever does.
         let mut prev = 0.0_f32;
-        let mut s = step.min(max_distance);
+        let top = t.max_height();
+        if origin.y > top {
+            if dir.y >= 0.0 {
+                return None;
+            }
+            prev = (origin.y - top) / -dir.y;
+            if prev > max_distance {
+                return None;
+            }
+        }
+        let mut s = (prev + step).min(max_distance);
         loop {
             let p = origin + dir * s;
             if inside(p) && below(p) {
@@ -423,5 +435,76 @@ mod tests {
             assert!(h.point.y > ground);
         }
         assert!(h.normal.y > 0.0 || h.normal.length() > 0.99);
+    }
+
+    /// From above the highest point of the relief: rays going up touch nothing, rays
+    /// coming down land on the ground (the march starts at the top height).
+    #[test]
+    fn rays_from_above_the_relief() {
+        let w = World::build(&crate::WorldSpec::procedural(3)).unwrap();
+        let top = w.terrain.max_height();
+        let mut rng = crate::rng::SplitMix64::new(4);
+        for _ in 0..500 {
+            let o = Vec3::new(rng.range(-60.0, 60.0), top + rng.range(0.5, 20.0), rng.range(-60.0, 60.0));
+            let a = rng.range(0.0, std::f32::consts::TAU);
+            let e = rng.range(0.05, 1.4);
+            let up = Vec3::new(a.cos() * e.cos(), e.sin(), a.sin() * e.cos());
+            assert!(w.raycast_terrain(o, up, 200.0).is_none());
+            let down = Vec3::new(up.x, -up.y, up.z);
+            if let Some(h) = w.raycast_terrain(o, down, 200.0) {
+                assert!((h.point.y - w.terrain.height_at(h.point.x, h.point.z)).abs() < 0.01, "{o} {down} {h:?}");
+            }
+        }
+    }
+
+    /// Raycast cost on a dense city, split between terrain and obstacles
+    /// (`cargo test --release -p world raycast_cost -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn raycast_cost() {
+        use std::time::Instant;
+        let spec = crate::WorldSpec::from_ron(include_str!("../../../maps/dense_city.ron")).unwrap();
+        let w = World::build(&spec).unwrap();
+        // A 16 × 360 lidar, 25 m, from 20 points along the streets, 2 m up.
+        let mut rays = Vec::new();
+        for k in 0..20 {
+            let a = k as f32 * 0.7;
+            let o = Vec3::new(30.0 * a.cos(), 0.0, 30.0 * a.sin());
+            let o = Vec3::new(o.x, w.terrain.height_at(o.x, o.z) + 2.0, o.z);
+            for c in 0..16 {
+                let e = (20.0 - 60.0 * c as f32 / 15.0).to_radians();
+                for r in 0..360 {
+                    let az = (r as f32).to_radians();
+                    rays.push((o, Vec3::new(-az.sin() * e.cos(), e.sin(), -az.cos() * e.cos())));
+                }
+            }
+        }
+        // Best of 5: the first passes warm the caches.
+        let time = |f: &dyn Fn(Vec3, Vec3) -> Option<Hit>| {
+            let mut best = f64::INFINITY;
+            let mut hits = 0;
+            for _ in 0..5 {
+                let t = Instant::now();
+                hits = 0;
+                for &(o, d) in &rays {
+                    hits += f(o, d).is_some() as usize;
+                }
+                best = best.min(t.elapsed().as_secs_f64() * 1e9 / rays.len() as f64);
+            }
+            (best, hits)
+        };
+        let (all, h) = time(&|o, d| w.raycast(o, d, 25.0));
+        let (terrain, _) = time(&|o, d| w.raycast_terrain(o, d, 25.0));
+        let (obstacles, _) = time(&|o, d| {
+            let mut best = None;
+            for ob in &w.obstacles {
+                let lim = best.map_or(25.0, |h: Hit| h.distance);
+                if let Some(h) = ray_obstacle(ob, o, d, lim) {
+                    best = Some(h);
+                }
+            }
+            best
+        });
+        println!("{} rays, {} hits, {} obstacles: raycast {all:.0} ns, terrain alone {terrain:.0} ns, all obstacles brute {obstacles:.0} ns", rays.len(), h, w.obstacles.len());
     }
 }

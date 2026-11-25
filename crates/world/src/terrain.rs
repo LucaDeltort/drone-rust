@@ -12,6 +12,8 @@ pub struct Heightmap {
     n: usize,
     cell_m: f32,
     heights: Vec<f32>,
+    /// Highest vertex: no ray above it can touch the ground.
+    max_h: f32,
 }
 
 impl Heightmap {
@@ -54,11 +56,17 @@ impl Heightmap {
                 h
             }
         };
-        Ok(Self { n, cell_m, heights })
+        let max_h = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        Ok(Self { n, cell_m, heights, max_h })
     }
 
     pub fn vertices_per_side(&self) -> usize {
         self.n
+    }
+
+    /// Highest point of the terrain, in m.
+    pub fn max_height(&self) -> f32 {
+        self.max_h
     }
 
     pub fn cell_m(&self) -> f32 {
