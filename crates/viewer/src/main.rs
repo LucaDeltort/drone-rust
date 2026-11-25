@@ -15,6 +15,7 @@
 //! O = unexpected obstacle in front of the drone.
 //! 3D map: M = show/hide the voxel map, V = show/hide the real world.
 
+mod airframe;
 mod dock;
 mod drone;
 mod map3d;

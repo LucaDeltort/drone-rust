@@ -190,6 +190,9 @@ struct Row {
     energy_wh: f32,
     /// Battery state of charge at the end (1 without battery).
     soc_end: f32,
+    /// Mean share of the sky masked by buildings along the flight (GPS satellites
+    /// lost), sampled every second.
+    sky_masked: f32,
 }
 
 /// Thresholds of a successful exploration: share of the free area known, share of the
@@ -213,6 +216,7 @@ fn run(case: &Case, args: &Args) -> Result<Row, String> {
     let mut row = Row::default();
     let (mut step_total, mut step_max) = (Duration::ZERO, Duration::ZERO);
     let mut steps = 0u32;
+    let (mut sky_sum, mut sky_samples) = (0.0f32, 0u32);
     // Compute time of a step: estimation and map (in `Sim`) + decision.
     let mut timed = |sim: &mut Sim, decide: &mut dyn FnMut(&OccupancyGrid, &world::drone::DroneState) -> world::drone::Command| {
         let before = sim.compute;
@@ -224,6 +228,11 @@ fn run(case: &Case, args: &Args) -> Result<Row, String> {
         step_total += total;
         step_max = step_max.max(total);
         steps += 1;
+        if (steps as f32 * dt) as u32 > ((steps - 1) as f32 * dt) as u32 {
+            let seen = sensors::Gps::satellites(&sim.world, sim.truth.position);
+            sky_sum += 1.0 - seen as f32 / sensors::Gps::SKY_SIZE as f32;
+            sky_samples += 1;
+        }
     };
 
     match case.mission {
@@ -299,19 +308,20 @@ fn run(case: &Case, args: &Args) -> Result<Row, String> {
     row.step_max_ms = step_max.as_secs_f32() * 1000.0;
     row.energy_wh = sim.truth.flight.energy_wh;
     row.soc_end = sim.truth.flight.soc;
+    row.sky_masked = sky_sum / sky_samples.max(1) as f32;
     Ok(row)
 }
 
 const HEADER: &str = "drone,map,mission,pose,seed,success,end,time_s,distance_m,collisions,\
 coverage_60s,coverage_180s,coverage_end,map_occupied_ok,map_free_ok,\
-pose_error_rms_m,pose_error_max_m,step_mean_ms,step_max_ms,b_x,b_z,energy_wh,soc_end";
+pose_error_rms_m,pose_error_max_m,step_mean_ms,step_max_ms,b_x,b_z,energy_wh,soc_end,sky_masked";
 
 fn csv_line(c: &Case, r: &Result<Row, String>) -> String {
     let opt = |v: Option<f32>| v.map_or(String::new(), |v| format!("{v:.4}"));
     let head = format!("{},{},{},{},{}", c.drone, c.map, c.mission.label(), c.pose.label(), c.seed);
     match r {
         Ok(r) => format!(
-            "{head},{},{},{:.2},{:.1},{},{},{},{},{:.4},{:.4},{:.3},{:.3},{:.3},{:.3},{},{},{:.2},{:.3}",
+            "{head},{},{},{:.2},{:.1},{},{},{},{},{:.4},{:.4},{:.3},{:.3},{:.3},{:.3},{},{},{:.2},{:.3},{:.3}",
             r.success as u8,
             r.end,
             r.time_s,
@@ -330,9 +340,10 @@ fn csv_line(c: &Case, r: &Result<Row, String>) -> String {
             opt(r.goal.map(|g| g.y)),
             r.energy_wh,
             r.soc_end,
+            r.sky_masked,
         ),
         // Impossible case (for example EKF without IMU): a row saying so.
-        Err(e) => format!("{head},0,\"error: {}\",,,,,,,,,,,,,,,,,", e.replace('"', "'")),
+        Err(e) => format!("{head},0,\"error: {}\",,,,,,,,,,,,,,,,,,", e.replace('"', "'")),
     }
 }
 

@@ -69,10 +69,13 @@ You can combine options. Bevy is slow in debug builds, so use `--release` in cit
 Blender style: the 3D view in the middle, the settings docked around it, never over it.
 
 - **Left panel**: Inspection (target, status, structure size, exploration limited to a
-  radius around the target), Mission A -> B, Exploration, 3D map & flight, Wind, Pose.
+  radius around the target), Mission A -> B, Exploration, 3D map & flight, Wind, Pose,
+  Airframe (battery, ground effect, thrust of each motor, and a health slider per
+  motor to make one fail in flight).
 - **Right panel**: onboard view (the camera is fixed to the airframe, so the horizon
   tilts when the drone does), Map (top-down occupancy grid and its consistency with the
-  terrain), Sensors (latest measurements, noise controls).
+  terrain), Sensors (latest measurements, gimbal or fixed mount, latency, noise
+  controls; the GPS shows its accuracy, or "no fix" when buildings mask the sky).
 - **Top right of the 3D view**: telemetry as text: speed, altitude, heading, pitch,
   roll, thrust, wind felt.
 - **Status bar**: world source and the keys of the current mode.
@@ -104,7 +107,7 @@ WorldSpec(
         (shape: Box(size: (0.5, 4.0, 30.0)), x: -4.0, z: -20.0),
         (shape: Cylinder(radius: 0.4, height: 6.0), x: 10.0, z: 5.0),
         (shape: Box(size: (5.0, 8.0, 3.0)), x: -15.0, z: 12.0, yaw_deg: 30.0),
-        (shape: Roof(size: (6.0, 2.0, 4.0)), x: -15.0, z: 12.0, yaw_deg: 30.0, elevation_m: 8.0),
+        (shape: Roof(size: (6.0, 2.0, 4.0)), x: -15.0, z: 12.0, yaw_deg: 30.0, elevation_m: 8.0, material: Glass),
     ]),
 )
 ```
@@ -114,6 +117,13 @@ WorldSpec(
 - `elevation_m` lifts an obstacle above the ground: lintels, floor slabs, roofs,
   canopies, bridges.
 - `Roof` is a gable roof, ridge along its length.
+- `material` (default `Concrete`) changes how lidars and depth cameras see a surface:
+  `Glass` lets 70 % of the rays through, `Dark` only answers within 35 % of the range
+  and loses some returns even there, `Metal` is three times noisier and sometimes
+  echoes from behind itself, `Foliage` returns from up to 1 m inside the canopy.
+  Sonars hear every material alike. In generated cities, 40 % of the towers are glass,
+  a few buildings dark or metal, and the trees foliage; the house map has metal cars
+  and poles, a dark car, a glass roof and leafy canopies.
 - The wind (`from_deg`: where it comes from, 0 = north) grows with height, comes in
   gusts that travel downwind, carries turbulent eddies, and drops in the lee of
   obstacles, where it gets gustier.
@@ -143,12 +153,22 @@ A `DroneSpec` describes:
 
 - the airframe: mass, max speed and acceleration, max yaw rate, radius, and
   optionally its dynamics: thrust-to-weight, max tilt and tilt rate, attitude and
-  motor time constants, linear and quadratic drag;
+  motor time constants, linear and quadratic drag, rotor radius (ground effect,
+  default 0.4 × radius) and a `battery` (capacity, full and empty voltage, internal
+  resistance; none: endless energy);
 - the onboard camera;
-- a list of sensors, each with its mount and rate.
+- a list of sensors, each with its mount, rate and `latency_s` (default 0: the
+  measurement keeps its capture time but arrives late).
+
+A mount is `stabilized` by default (on a gimbal: it only follows the heading).
+`stabilized: false` fixes the sensor to the airframe: it tilts when the drone
+accelerates, and a 2D lidar then sees the ground or the sky. The Mapper's and the
+Pro's lidars are fixed.
 
 The sensor types are `Lidar2D`, `Lidar3D`, `Sonar` and `Depth` for perception, and
-`Imu`, `Baro` and `Gps` for navigation. Noise, dropouts and biases are configurable per sensor.
+`Imu`, `Baro` and `Gps` for navigation. Noise, dropouts and biases are configurable per
+sensor. A sonar's `multipath` (0 to 1, 0.3 on the Cheap, Heavy and Pro) is the chance
+that an echo off an oblique surface bounces off a second one first and reads too far.
 
 ## Benchmark
 
@@ -165,7 +185,7 @@ cargo run --release -p bench -- --drones scout,pro --maps corridor,downtown --mi
 
 | Option | Default | Values |
 |---|---|---|
-| `--drones` | all | `scout`, `heavy`, `cheap`, `pro` |
+| `--drones` | all | `scout`, `heavy`, `cheap`, `pro`, or a `.ron` path (e.g. `drones/mapper.ron`) |
 | `--maps` | all | names from the map table, `seed42`, `seed7`, any `seedN`, or a `.ron` path |
 | `--missions` | all | `explore-nearest`, `explore-infogain`, `a-b` |
 | `--poses` | all | `truth`, `ekf-gps`, `ekf` |
@@ -183,13 +203,17 @@ cargo run --release -p bench -- --drones scout,pro --maps corridor,downtown --mi
 
 The CSV has one row per simulation. Besides success, it records time, distance,
 collisions, coverage at 60 s, 180 s and at the end, map correctness (occupied and free),
-pose error (RMS and max), and compute time per step (mean and max).
+pose error (RMS and max), compute time per step (mean and max), electrical energy drawn
+and final battery charge (`energy_wh`, `soc_end`), and the mean share of the sky masked
+by buildings along the flight (`sky_masked`: GPS satellites lost).
 
 ## Results
 
 The full matrix has 4 drones × 7 maps × 3 missions × 3 pose modes = 252 runs, with
-seed 1 and the default limits. These results predate the flight dynamics and the
-wind: rerun the bench to update them. The raw data is in [`bench/results.csv`](bench/results.csv).
+seed 1 and the default limits. These results predate the flight dynamics, the wind
+and the sensor realism (fixed mounts, lidar sweep, materials, sonar multipath, urban
+GPS), which lower the scores, mostly with GPS in the cities: rerun the bench to update
+them. The raw data is in [`bench/results.csv`](bench/results.csv).
 
 ### Success by mission and pose mode
 
@@ -257,10 +281,10 @@ The project is a Cargo workspace with one crate per layer:
 
 | Crate | Role |
 |---|---|
-| `world` | Terrain and relief, obstacles (boxes, cylinders, roofs), raycasts and contacts (8 m grid spatial index), procedural cities, wind field, quadrotor flight dynamics |
+| `world` | Terrain and relief, obstacles (boxes, cylinders, roofs) and their materials, raycasts and contacts (8 m grid spatial index), procedural cities, wind field, quadrotor flight dynamics |
 | `drone_spec` | RON description of a drone, with validation |
-| `sensors` | 2D and 3D lidar, sonar, depth camera; noisy IMU, barometer and GPS |
-| `mapping` | 2D occupancy grid: ray casting, per-cell hit/miss evidence, ambiguous cells; scan-to-map matching (point-to-plane ICP); sparse 3D voxel map (3D DDA) |
+| `sensors` | 2D and 3D lidar (sweeping), sonar (multipath), depth camera, with material responses; noisy IMU, barometer, and GPS masked by buildings; mounts, latency; rays cast in parallel |
+| `mapping` | 2D occupancy grid: ray casting, per-cell hit/miss evidence, ambiguous cells; scan-to-map matching (point-to-plane ICP); sparse 3D voxel map (3D DDA, integrated in parallel, change tracking per 16³ chunk); lidar deskew |
 | `planning` | Frontiers, exploration (nearest / information gain), incremental D* Lite, timed trajectory, safe-speed control |
 | `estimation` | 11-state EKF (position, velocity, yaw, accelerometer and gyro biases) on IMU + barometer + GPS + scan matching |
 | `sim` | Headless simulation (drone + sensors + estimation + map), shared by tests and the bench |
@@ -279,8 +303,30 @@ The project is a Cargo workspace with one crate per layer:
   - Drag acts on the airspeed (velocity relative to the wind). A gale stronger than
     the tilt limit allows wins.
   - Obstacles push the drone back out and absorb most of the impact.
-  - The 2D and 3D lidars sit on a stabilized mount (heading only), so the slab map
-    stays horizontal; the onboard camera tilts with the airframe.
+  - The physics runs in 2 ms sub-steps, whatever the outer step.
+  - Four motors in an X, each with its own lag and limit: the mixer gives priority to
+    the thrust, then to the attitude, and the attitude follows from the torques. A
+    motor can be weakened or killed in flight.
+  - Close to the ground, the rotors push harder (ground effect); the linear drag only
+    acts in the rotor plane (induced rotor drag).
+  - With a battery, the voltage sags with the charge and the current, and the
+    available thrust with it.
+- **Sensor realism.**
+  - A sensor is on a gimbal (heading only) or fixed to the airframe; the onboard
+    camera always tilts with the airframe.
+  - A spinning lidar fires its rays along its sweep, from wherever the drone is at
+    that instant: moving or turning, it sees a distorted scan. The measurement keeps
+    the pose at the start of the sweep, and the maps and the scan matching put each
+    ray back where it was fired from (deskew).
+  - Measurements can arrive late; each keeps its capture time and pose.
+  - Materials, sonar multipath and GPS masking: see *Maps* and *Drones*. The GPS
+    looks for 16 satellites spread over the sky: the share that buildings mask
+    worsens its accuracy (up to ×10), adds a slow multipath bias, and below four
+    satellites there is no fix. Each fix carries its accuracy, which the EKF uses.
+- **Performance.** Lidar and depth rays are cast in parallel (rayon), each with its
+  own noise generator so that a run stays deterministic, and the voxel rays are traced
+  in parallel then applied in order. Hash maps use FxHash. The viewer remeshes only the
+  16³ chunks of the voxel map that changed.
 - **Inspection of one structure** (needs 3D flight).
   - From the target point, the structure is found in the drone's own 3D map: the
     voxel columns standing more than 1 m out of the local ground, connected to the
@@ -366,7 +412,13 @@ There are about a hundred tests, for example:
 - inspection: the house is found with its real size, all four walls and the roof are
   mapped, the far building is never approached, and the drone comes back home; on
   the house map, in the wind, with no contact;
-- an exploration limited to 10 m stops there.
+- an exploration limited to 10 m stops there;
+- sensors: a fixed lidar on a pitched drone hits the ground, a late measurement
+  arrives late with its capture time, a sweep while turning is distorted and deskew
+  undoes it;
+- materials: glass lets most rays through, dark surfaces only answer up close, metal
+  echoes behind itself, leaves scatter; a sonar echo off an oblique floor bounces;
+  a wall degrades the GPS fix and a canyon loses it.
 
 ## Known limitations
 
@@ -380,6 +432,12 @@ There are about a hundred tests, for example:
 - The wind's shelter is a single upwind raycast: no flow around buildings.
 - Scan matching is scan-to-map without loop closure: an error made while
   exploring is written into the map and never undone.
+- The EKF knows the tilt exactly (it reads it from the simulation): a strapdown IMU
+  with a 15-state error-state filter, rotor drag fusion and wind estimation is on the
+  `phase5` branch, but without GPS it still loses missions the current filter wins,
+  until the scan matching is retuned for it.
+- Fixed-mount 2D lidars see the ground when the drone tilts: without GPS, the Pro and
+  the Mapper match fewer points and drift more than with a gimbal.
 
 ## License
 

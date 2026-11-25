@@ -444,6 +444,7 @@ dependencies = [
  "glam 0.33.12",
  "mapping",
  "planning",
+ "sensors",
  "sim",
  "world",
 ]

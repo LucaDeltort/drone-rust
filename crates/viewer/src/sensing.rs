@@ -142,6 +142,7 @@ pub fn panel(ui: &mut egui::Ui, view: &mut DebugView, fov: &mut FpvFov, suites: 
                 fov.0 = f;
             }
             for mut suite in suites.iter_mut() {
+                let latency: Vec<f64> = (0..suite.0.sensors.len()).map(|i| suite.0.latency(i)).collect();
                 let SensorSuite { sensors, latest, .. } = &mut suite.0;
                 if sensors.is_empty() {
                     ui.label("This drone has no sensor.");
@@ -150,6 +151,9 @@ pub fn panel(ui: &mut egui::Ui, view: &mut DebugView, fov: &mut FpvFov, suites: 
                     ui.separator();
                     ui.strong(sensor.label());
                     ui.label(format!("{} Hz — {}", sensor.rate_hz(), summary(m.as_ref())));
+                    let mount = if sensor.mount().stabilized { "on a gimbal" } else { "fixed to the airframe" };
+                    let late = if latency[i] > 0.0 { format!(", {:.0} ms late", latency[i] * 1000.0) } else { String::new() };
+                    ui.weak(format!("{mount}{late}"));
                     let n = sensor.noise_mut();
                     ui.push_id(i, |ui| {
                         ui.add(egui::Slider::new(&mut n.std_m, 0.0..=0.5).text("noise σ (m)"));

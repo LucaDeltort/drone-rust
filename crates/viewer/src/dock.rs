@@ -15,7 +15,7 @@ use bevy::{
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, PrimaryEguiContext, egui};
 
 use crate::{
-    CurrentWorld, OuterCamera,
+    CurrentWorld, OuterCamera, airframe,
     drone::{DroneConfig, FPV_ASPECT, FpvCamera, FpvFov, SimDrone},
     explore::{self, Exploration},
     inspect::{self, Inspection},
@@ -101,15 +101,16 @@ fn layout(
     ),
     (mut world, mut streaks, mut m3): (ResMut<CurrentWorld>, ResMut<Streaks>, ResMut<Map3d>),
     (mut view, mut fov, mut suites): (ResMut<DebugView>, ResMut<FpvFov>, Query<&mut Suite>),
-    (mut settings, mut overlays, drones): (
+    (mut settings, mut overlays, mut drones): (
         ResMut<MapSettings>,
         Query<&mut Visibility, With<MapOverlay>>,
-        Query<&SimDrone>,
+        Query<&mut SimDrone>,
     ),
 ) -> Result {
     let texture = contexts.add_image(EguiTextureHandle::Strong(map.image.clone()));
     let ctx = contexts.ctx_mut()?.clone();
     let drone = drones.single().ok();
+    let mut motor_health = None;
     let mut root = egui::Ui::new(
         ctx.clone(),
         "dock".into(),
@@ -133,6 +134,9 @@ fn layout(
             section(ui, "3D map & flight", true, |ui| map3d::panel(ui, &mut m3, &mut ex, &mut mission));
             section(ui, "Wind", true, |ui| wind::panel(ui, &mut world, &mut streaks, drone));
             section(ui, "Pose", false, |ui| pose::panel(ui, &mut est, &config));
+            section(ui, "Airframe", false, |ui| {
+                motor_health = airframe::panel(ui, &config.0.airframe, drone.map(|d| &d.state));
+            });
         });
     });
 
@@ -151,6 +155,12 @@ fn layout(
             section(ui, "Sensors", false, |ui| sensing::panel(ui, &mut view, &mut fov, &mut suites));
         });
     });
+
+    if let Some(h) = motor_health
+        && let Ok(mut d) = drones.single_mut()
+    {
+        d.state.flight.motor_health = h;
+    }
 
     // What the panels left: the 3D view.
     let view_rect = root.available_rect_before_wrap();

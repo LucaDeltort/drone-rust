@@ -169,6 +169,9 @@ impl Gps {
         Self { mount, rate_hz, noise: Noise { std_m: noise_std, growth_per_m2: 0.0, dropout: 0.0 }, bias: Vec3::ZERO, rng }
     }
 
+    /// Satellites in view in the open.
+    pub const SKY_SIZE: usize = SKY.len();
+
     /// Satellites in view from `at`: the sky directions no obstacle masks.
     pub fn satellites(world: &World, at: Vec3) -> usize {
         SKY.iter()

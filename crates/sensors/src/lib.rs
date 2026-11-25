@@ -457,6 +457,11 @@ impl SensorSuite {
         fresh
     }
 
+    /// Delivery delay of sensor `i`, in s.
+    pub fn latency(&self, i: usize) -> f64 {
+        self.latency[i]
+    }
+
     /// Forgets the measurements in flight and the sweep starts (after a teleport or
     /// a world rebuild).
     pub fn reset(&mut self) {
