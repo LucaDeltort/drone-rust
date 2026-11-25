@@ -18,7 +18,7 @@ struct Outcome {
 }
 
 fn run(world: &World, spec: &DroneSpec, strategy: Strategy, limit_s: f32) -> Outcome {
-    run_with(world, spec, ExplorerConfig::new(strategy, &spec.airframe), limit_s)
+    run_with(world, spec, ExplorerConfig::new(strategy, spec), limit_s)
 }
 
 fn run_with(world: &World, spec: &DroneSpec, cfg: ExplorerConfig, limit_s: f32) -> Outcome {
@@ -117,7 +117,7 @@ fn scout_explores_the_corridor_information_gain() {
 #[test]
 fn zone_limits_the_exploration() {
     let spec = DroneSpec::scout();
-    let mut cfg = ExplorerConfig::new(Strategy::Nearest, &spec.airframe);
+    let mut cfg = ExplorerConfig::new(Strategy::Nearest, &spec);
     cfg.zone = Some(crate::Zone { center: Vec2::ZERO, radius: 10.0 });
     let o = run_with(&corridor(), &spec, cfg, 300.0);
     println!("zone of 10 m: {:?} in {:.0} s, farthest {:.1} m", o.status, o.seconds, o.farthest);

@@ -237,7 +237,7 @@ fn run(case: &Case, args: &Args) -> Result<Row, String> {
 
     match case.mission {
         Mission::Explore(strategy) => {
-            let mut explorer = Explorer::new(ExplorerConfig::new(strategy, &airframe), altitude);
+            let mut explorer = Explorer::new(ExplorerConfig::new(strategy, &sim.spec), altitude);
             let mut next_mark = 0;
             while sim.t < args.explore_limit_s && explorer.status == Status::Exploring {
                 timed(&mut sim, &mut |g, s| explorer.update(g, s, &airframe, dt));

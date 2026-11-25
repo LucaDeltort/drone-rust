@@ -180,6 +180,11 @@ impl DistanceField {
         Self { nx, cell_m, dist, parent }
     }
 
+    /// Number of reachable cells.
+    pub fn reached(&self) -> usize {
+        self.dist.iter().filter(|d| d.is_finite()).count()
+    }
+
     /// Travel cost to the cell (m, margin cells counting
     /// `MARGIN_COST` times), infinite if unreachable.
     pub fn distance(&self, i: usize, j: usize) -> f32 {

@@ -68,11 +68,18 @@ const AMBIGUOUS_MIN: u16 = 3;
 /// rays), and at least one for every `MATTER_RATIO` passes, holds matter even if most
 /// rays cross it: glass lets most beams through, and its few echoes would otherwise
 /// be outvoted and the pane erased. Passes through it then count for
-/// `MATTER_MISS_WEIGHT` only. Sonar echoes do not count: a cone marks a whole arc,
-/// mostly empty, that later passes must be able to clear.
+/// `MATTER_MISS_WEIGHT` only, and prove nothing beyond it: what lies behind an
+/// established wall is only reached through glass or by a phantom echo (a lidar beam
+/// bounced off metal, reading too far), and must not empty the inside of the building.
+/// Sonar echoes do not count: a cone marks a whole arc, mostly empty, that later
+/// passes must be able to clear.
 const MATTER_HITS: u16 = 3;
 const MATTER_RATIO: u16 = 4;
 const MATTER_MISS_WEIGHT: f32 = 0.2;
+/// A ray passing this much above a cell's highest echo does not cross its matter, in m.
+const ABOVE_MATTER_M: f32 = 0.1;
+/// An echo less than this beyond established matter comes from the same wall, in m.
+const SAME_WALL_M: f32 = 1.0;
 
 /// Weight of a sonar ray relative to a lidar ray.
 const SONAR_WEIGHT: f32 = 0.3;
@@ -95,6 +102,8 @@ pub struct OccupancyGrid {
     /// Mean position (x, z) of the hits in each cell: where the surface really is,
     /// finer than the cell, for scan matching.
     hit_mean: Vec<Vec2>,
+    /// Height of the highest optical echo of each cell, in m.
+    hit_top: Vec<f32>,
     /// Rectangle (i0, j0, i1, j1) of the cells observed so far: beyond it, everything is
     /// unknown, and computations on the map can stick to this rectangle.
     bounds: Option<[usize; 4]>,
@@ -118,6 +127,7 @@ impl OccupancyGrid {
             logodds: vec![0.0; n * n],
             evidence: vec![[0; 3]; n * n],
             hit_mean: vec![Vec2::ZERO; n * n],
+            hit_top: vec![f32::NEG_INFINITY; n * n],
             bounds: None,
             miss_as_free: true,
         }
@@ -135,6 +145,7 @@ impl OccupancyGrid {
         self.logodds.fill(0.0);
         self.evidence.fill([0; 3]);
         self.hit_mean.fill(Vec2::ZERO);
+        self.hit_top.fill(f32::NEG_INFINITY);
         self.bounds = None;
     }
 
@@ -272,6 +283,7 @@ impl OccupancyGrid {
             None => t1,
         };
         let mut touched = 0;
+        let mut behind_matter = false;
         if t1 > t0 {
             // Step of a third of a cell: no crossed cell is skipped.
             let step = self.cell_m / 3.0;
@@ -289,29 +301,40 @@ impl OccupancyGrid {
                         break;
                     }
                     last = Some(c);
+                    let [_, misses, echoes] = self.evidence[c.1 * self.nx + c.0];
+                    let matter = echoes >= MATTER_HITS && echoes.saturating_mul(MATTER_RATIO) >= misses;
                     // A ray that only clips the cell does not prove it is
                     // empty: it often grazes a wall occupying the rest of it (and the camera
                     // casts thousands of them). Only a pass near the center counts.
                     let to_center = self.center(c.0, c.1) - Vec2::new(origin.x, origin.z);
                     let flat = Vec2::new(dir.x, dir.z).normalize_or_zero();
-                    if flat != Vec2::ZERO && flat.perp_dot(to_center).abs() > self.cell_m * CENTER_PASS {
-                        t += step;
-                        continue;
+                    let central = flat == Vec2::ZERO || flat.perp_dot(to_center).abs() <= self.cell_m * CENTER_PASS;
+                    if central {
+                        let w = if matter { weight * MATTER_MISS_WEIGHT } else { weight };
+                        self.add(c.0, c.1, self.params.miss * w);
+                        touched += 1;
                     }
-                    let [_, misses, echoes] = self.evidence[c.1 * self.nx + c.0];
-                    let matter = echoes >= MATTER_HITS && echoes.saturating_mul(MATTER_RATIO) >= misses;
-                    let w = if matter { weight * MATTER_MISS_WEIGHT } else { weight };
-                    self.add(c.0, c.1, self.params.miss * w);
-                    touched += 1;
+                    // Above the highest echo (a slope filling only the bottom of
+                    // the slab), the ray does not cross the matter. An echo just
+                    // beyond is the same wall, seen from a slightly different pose.
+                    let far_behind = range.is_none_or(|r| r - t > SAME_WALL_M);
+                    if matter && far_behind && p.y <= self.hit_top[c.1 * self.nx + c.0] + ABOVE_MATTER_M {
+                        behind_matter = true;
+                        break;
+                    }
                 }
                 t += step;
             }
         }
-        if let (Some((i, j)), Some(p)) = (hit_cell, hit_point) {
+        // An echo from behind an established wall (through glass, or a phantom) is
+        // left out too: a phantom would put matter in the next street.
+        if let (Some((i, j)), Some(p), false) = (hit_cell, hit_point, behind_matter) {
             self.add(i, j, self.params.hit * weight);
             if weight >= 1.0 {
                 let e = &mut self.evidence[j * self.nx + i][2];
                 *e = e.saturating_add(1);
+                let top = &mut self.hit_top[j * self.nx + i];
+                *top = top.max(p.y);
             }
             // Mean of the hits: an established surface barely moves, so the map
             // does not follow a drifting pose.

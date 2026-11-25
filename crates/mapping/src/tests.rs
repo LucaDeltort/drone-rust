@@ -98,6 +98,43 @@ fn a_pane_that_most_rays_cross_stays_occupied() {
     assert_eq!(g.cell(i, j), Cell::Occupied);
 }
 
+/// Behind an established wall, an echo reading too far (a phantom bounced off metal,
+/// or a beam through glass) neither empties the inside nor puts matter beyond it.
+#[test]
+fn an_echo_from_behind_an_established_wall_is_ignored() {
+    let mut g = grid();
+    let o = Vec3::new(0.1, 2.0, 0.1);
+    for _ in 0..10 {
+        g.integrate_ray(o, Vec3::X, Some(5.0), 10.0, 1.0);
+    }
+    for _ in 0..3 {
+        g.integrate_ray(o, Vec3::X, Some(8.0), 10.0, 1.0);
+    }
+    let cell = |x: f32| {
+        let (i, j) = g.index(x, 0.1).unwrap();
+        g.cell(i, j)
+    };
+    assert_eq!(cell(5.1), Cell::Occupied);
+    assert_eq!(cell(6.5), Cell::Unknown);
+    assert_eq!(cell(8.1), Cell::Unknown);
+    assert_eq!(cell(3.0), Cell::Free);
+}
+
+/// A slope filling only the bottom of the slab: a ray passing above its echoes
+/// goes on freeing the cells beyond.
+#[test]
+fn a_ray_above_low_matter_is_not_stopped() {
+    let mut g = grid();
+    for _ in 0..10 {
+        g.integrate_ray(Vec3::new(0.1, 1.2, 0.1), Vec3::X, Some(5.0), 10.0, 1.0);
+    }
+    for _ in 0..3 {
+        g.integrate_ray(Vec3::new(0.1, 2.5, 0.1), Vec3::X, Some(8.0), 10.0, 1.0);
+    }
+    let (i, j) = g.index(6.5, 0.1).unwrap();
+    assert_eq!(g.cell(i, j), Cell::Free);
+}
+
 #[test]
 fn rays_leaving_the_map_are_cut() {
     let mut g = grid();

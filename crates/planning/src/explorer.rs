@@ -7,7 +7,7 @@
 
 use rustc_hash::FxHashSet as HashSet;
 
-use drone_spec::Airframe;
+use drone_spec::{Airframe, DroneSpec, SensorKind};
 use glam::Vec2;
 use mapping::OccupancyGrid;
 use world::drone::{Command, DroneState};
@@ -24,7 +24,16 @@ pub enum Strategy {
     InfoGain,
 }
 
+/// Horizontal field of a mapping sensor.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View {
+    /// Direction relative to the heading, in rad (positive to the left).
+    pub yaw: f32,
+    /// Half-angle, in rad (π: all around).
+    pub half_fov: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExplorerConfig {
     pub strategy: Strategy,
     /// Margin around obstacles (drone radius + safety), in m.
@@ -49,10 +58,28 @@ pub struct ExplorerConfig {
     /// Only explore this area: frontiers outside are ignored, and the
     /// exploration is done when the area is.
     pub zone: Option<crate::Zone>,
+    /// Fields of the mapping sensors: the drone need not turn to face where it
+    /// goes when one of them already looks there.
+    pub views: Vec<View>,
 }
 
 impl ExplorerConfig {
-    pub fn new(strategy: Strategy, airframe: &Airframe) -> Self {
+    pub fn new(strategy: Strategy, spec: &DroneSpec) -> Self {
+        let airframe = &spec.airframe;
+        let views = spec
+            .sensors
+            .iter()
+            .filter_map(|s| {
+                let half_fov = match s.kind {
+                    SensorKind::Lidar2D { .. } | SensorKind::Lidar3D { .. } => std::f32::consts::PI,
+                    SensorKind::Depth { fov_deg, .. } => fov_deg.to_radians() / 2.0,
+                    SensorKind::Sonar { cone_deg, .. } => cone_deg.to_radians() / 2.0,
+                    _ => return None,
+                };
+                // A sensor looking down or up does not see the slab.
+                (s.mount.pitch_deg.abs() < 45.0).then_some(View { yaw: s.mount.yaw_deg.to_radians(), half_fov })
+            })
+            .collect();
         Self {
             strategy,
             inflate_m: airframe.radius + 0.35,
@@ -65,6 +92,7 @@ impl ExplorerConfig {
             waypoint_radius_m: 0.3,
             stuck_s: 6.0,
             zone: None,
+            views,
         }
     }
 }
@@ -111,6 +139,19 @@ pub struct Explorer {
 const RESCAN_M: f32 = 1.0;
 /// Wait for the first measurements before concluding anything, in s.
 const FIRST_LOOK_S: f32 = 0.5;
+
+/// Margins taken off when the normal ones leave no frontier reachable, in m...
+const TIGHTEN_M: f32 = 0.35;
+/// ...from a reachable area smaller than this, in m².
+const POCKET_M2: f32 = 100.0;
+
+/// How far past the edge of the map the drone may stray and still plan, in m.
+const EDGE_SLACK_M: f32 = 2.0;
+
+/// Speed at which the drone reaches its target, in m/s.
+const ARRIVAL_SPEED: f32 = 2.0;
+/// Passing the target within the distance flown in this time counts as reaching it, in s.
+const REACH_S: f32 = 0.15;
 
 /// Radius within which an old target is considered the same.
 const SAME_TARGET_M: f32 = 1.5;
@@ -173,12 +214,15 @@ impl Explorer {
     fn replan(&mut self, grid: &OccupancyGrid, state: &DroneState) {
         self.since_replan = 0.0;
         let pos = Vec2::new(state.position.x, state.position.z);
-        let Some(start) = grid.index(pos.x, pos.y) else {
+        // Just past the edge of the map (a target on the edge, overshot, or a noisy
+        // pose): plan from the nearest cell inside. Farther out, the pose is lost.
+        let (nx, nz) = grid.size();
+        let inside = grid.center(0, 0).max(pos).min(grid.center(nx - 1, nz - 1));
+        let start = (inside.distance(pos) <= EDGE_SLACK_M).then(|| grid.index(inside.x, inside.y)).flatten();
+        let Some(start) = start else {
             self.finish();
             return;
         };
-        let cspace = CSpace::build(grid, self.cfg.inflate_m, self.cfg.unknown_margin_m);
-        let field = DistanceField::from(&cspace, grid.cell_m(), start);
         let mut frontiers = frontier::detect(grid, self.cfg.min_frontier_cells, &self.exhausted);
         if let Some(zone) = self.cfg.zone {
             // Keep only the frontier cells inside the area.
@@ -197,7 +241,23 @@ impl Explorer {
         self.grid_origin = grid.center(0, 0) - grid.cell_m() * 0.5;
         self.frontiers = frontiers.iter().map(|f| f.centroid).collect();
 
-        let Some((goal, _)) = self.choose(grid, &cspace, &field, &frontiers) else {
+        // Normal margins first. If no frontier is reachable while some remain and the
+        // drone can only reach a small area, it may be shut in a pocket that the
+        // margins closed as the map filled in behind it: try again with tight margins
+        // along the way before concluding. (Out in the open, frontiers behind narrow
+        // gaps stay out of reach.)
+        let normal = CSpace::build(grid, self.cfg.inflate_m, self.cfg.unknown_margin_m);
+        let field = DistanceField::from(&normal, grid.cell_m(), start);
+        let pocket = (field.reached() as f32) * grid.cell_m().powi(2) < POCKET_M2;
+        let mut found = self.choose(grid, &normal, &field, &frontiers).map(|(goal, _)| (goal, None, field));
+        if found.is_none() && !frontiers.is_empty() && pocket {
+            let tight = CSpace::build(grid, self.cfg.inflate_m - TIGHTEN_M, self.cfg.unknown_margin_m - TIGHTEN_M);
+            let field = DistanceField::from(&tight, grid.cell_m(), start);
+            // The target itself stays safe with the normal margins: only the way
+            // out of the pocket may be tight.
+            found = self.choose(grid, &normal, &field, &frontiers).map(|(goal, _)| (goal, Some(tight), field));
+        }
+        let Some((goal, tight, field)) = found else {
             self.path.clear();
             // No measurement yet: wait.
             if self.elapsed < FIRST_LOOK_S && grid.cell(start.0, start.1) == mapping::Cell::Unknown {
@@ -226,7 +286,7 @@ impl Explorer {
             self.path.clear();
             return;
         }
-        let mut path = grid::to_world(grid, &grid::smooth(&cspace, &cells));
+        let mut path = grid::to_world(grid, &grid::smooth(tight.as_ref().unwrap_or(&normal), &cells));
         // The path starts from the drone's exact position, not from its cell's center.
         path[0] = pos;
         self.path = path;
@@ -291,6 +351,12 @@ impl Explorer {
         }
     }
 
+    /// A mapping sensor looks `bearing` (rad, relative to the heading, positive to the
+    /// left) away from the nose.
+    fn sees(&self, bearing: f32) -> bool {
+        self.cfg.views.iter().any(|v| v.half_fov >= std::f32::consts::PI || wrap(bearing - v.yaw).abs() <= v.half_fov)
+    }
+
     fn cell_center(&self, (i, j): (usize, usize)) -> Vec2 {
         self.grid_origin + (Vec2::new(i as f32, j as f32) + 0.5) * self.cell_m
     }
@@ -316,7 +382,9 @@ impl Explorer {
         let aim = self.path[self.next];
         let remaining = pos.distance(aim)
             + self.path[self.next..].windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
-        if remaining < 0.3 {
+        // The drone does not stop on its target: at speed, passing close counts.
+        let speed_now = Vec2::new(state.velocity.x, state.velocity.z).length();
+        if remaining < 0.3 + speed_now * REACH_S {
             // Target reached. If its frontier does not disappear (unobservable: behind
             // a wall, too high, too low), it will not be targeted again.
             if let Some(t) = self.target.take() {
@@ -343,9 +411,12 @@ impl Explorer {
             }
         }
 
-        // Speed: max, stopping distance before the end, slowing down before a corner.
+        // Speed: max, slowing down before the end and before a corner. No full stop
+        // at the end: the target is only a viewpoint on a frontier, the next one often
+        // lies beyond, and `safe_velocity` already stops the drone before the unknown
+        // and the obstacles.
         let a = airframe.max_accel;
-        let mut speed = airframe.max_speed.min((2.0 * a * remaining).sqrt());
+        let mut speed = airframe.max_speed.min((2.0 * a * remaining).sqrt() + ARRIVAL_SPEED);
         if self.next < self.path.len() - 1 {
             let turn = (aim - pos).normalize_or_zero().dot((self.path[self.next + 1] - aim).normalize_or_zero());
             if turn < 0.85 {
@@ -355,9 +426,12 @@ impl Explorer {
 
         let dir = (aim - pos).normalize_or_zero();
         let err = wrap(control::yaw_towards(dir) - state.yaw);
-        // Gaze control: only move towards where we look; too far off,
-        // turn first (forward sensors have not seen the side).
-        speed *= err.cos().max(0.0);
+        // Gaze control: only move towards where a sensor looks; too far off, turn
+        // first (forward sensors have not seen the side). A drone that sees all
+        // around (lidar) does not have to.
+        if !self.sees(err) {
+            speed *= err.cos().max(0.0);
+        }
         let v2 = control::safe_velocity(grid, state, airframe, dir * speed);
         control::command(state, airframe, v2, err, up)
     }

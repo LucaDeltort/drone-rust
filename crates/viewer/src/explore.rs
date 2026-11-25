@@ -66,7 +66,7 @@ impl Plugin for ExplorePlugin {
 /// Starts the exploration (and stops the A-to-B mission: only one at a time).
 fn start(ex: &mut Exploration, mission: &mut Mission, map: &Map, config: &DroneConfig) {
     mission.navigator = None;
-    let mut cfg = ExplorerConfig::new(ex.strategy, &config.0.airframe);
+    let mut cfg = ExplorerConfig::new(ex.strategy, &config.0);
     cfg.lambda = ex.lambda;
     cfg.inflate_m = config.0.airframe.radius + ex.clearance_m;
     cfg.unknown_margin_m = cfg.inflate_m;
