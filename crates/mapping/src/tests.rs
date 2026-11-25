@@ -73,14 +73,29 @@ fn log_odds_are_clamped_so_the_map_can_change_its_mind() {
     }
     let (i, j) = g.index(5.1, 0.1).unwrap();
     assert_eq!(g.logodds(i, j), g.params.max);
-    // The obstacle disappears (the ray comes back from a farther wall): a few passes
-    // are enough to free the cell.
+    // The obstacle disappears (the ray comes back from a farther wall): the cell is
+    // freed. Slowly, since its 100 echoes made it matter that most rays may cross
+    // (glass): passes count for a fifth until they outnumber the echoes four to one.
     let mut passes = 0;
     while g.cell(i, j) != Cell::Free {
         g.integrate_ray(o, Vec3::X, Some(8.0), 10.0, 1.0);
         passes += 1;
-        assert!(passes < 20);
+        assert!(passes < 60, "{passes}");
     }
+}
+
+/// A glass pane: 30 % of the rays echo on it, the others cross it and come back
+/// from a wall behind. The pane stays in the map.
+#[test]
+fn a_pane_that_most_rays_cross_stays_occupied() {
+    let mut g = grid();
+    let o = Vec3::new(0.1, 2.0, 0.1);
+    for k in 0..200 {
+        let range = if k % 10 < 3 { 5.0 } else { 8.0 };
+        g.integrate_ray(o, Vec3::X, Some(range), 10.0, 1.0);
+    }
+    let (i, j) = g.index(5.1, 0.1).unwrap();
+    assert_eq!(g.cell(i, j), Cell::Occupied);
 }
 
 #[test]

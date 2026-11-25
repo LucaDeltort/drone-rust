@@ -51,10 +51,12 @@ pub fn limit_velocity(obstacles: &[grid::Near], state: &DroneState, airframe: &A
         (2.0 * 0.7 * a * (o.distance - airframe.radius - margin - reaction).max(0.0)).sqrt()
     };
     let mut v2 = wanted;
-    if obstacles.iter().any(|o| v_now.dot(o.dir) > limit(o)) {
-        // Already too fast towards an obstacle (momentum from before a heading change):
-        // braking takes priority. Start from the current velocity so that all
-        // available acceleration goes into braking.
+    // Already too fast towards an obstacle (momentum from before a heading change):
+    // braking takes priority. Start from the current velocity so that all available
+    // acceleration goes into braking. Unless the wanted velocity leads away from
+    // every such obstacle: it brakes as well, and copying a slow drift inside the
+    // margin would hold it forever, the drone never leaving the wall.
+    if obstacles.iter().any(|o| v_now.dot(o.dir) > limit(o) && wanted.dot(o.dir) > 0.0) {
         v2 = v_now;
     }
     // Successive projections onto each constraint v·n ≤ limit(d).
@@ -93,4 +95,38 @@ pub fn wrap(a: f32) -> f32 {
     use std::f32::consts::{PI, TAU};
     let a = a.rem_euclid(TAU);
     if a > PI { a - TAU } else { a }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use drone_spec::DroneSpec;
+    use world::{ObstaclesSpec, TerrainSpec, World, WorldSpec};
+
+    /// Inside the margin of a wall, drifting slowly towards it: the drone may still
+    /// leave along a path that leads away (the command no longer copies the drift).
+    #[test]
+    fn a_slow_drift_into_a_wall_does_not_hold_the_drone() {
+        let w = World::build(&WorldSpec {
+            size_m: 50.0,
+            cell_m: 2.0,
+            terrain: TerrainSpec::Flat { height: 0.0 },
+            obstacles: ObstaclesSpec::None,
+            wind: Default::default(),
+        })
+        .unwrap();
+        let airframe = DroneSpec::scout().airframe;
+        let mut state = DroneState::spawn(&w, 0.0, 0.0, 2.0);
+        state.velocity = Vec3::new(0.1, 0.0, 0.03);
+        // Wall 0.28 m away along +z: within the 0.15 m margin of the 0.25 m body.
+        let wall = [grid::Near { distance: 0.28, dir: Vec2::Y, occupied: true }];
+        let away = Vec2::new(-0.95, -0.3) * 2.0;
+        let v = limit_velocity(&wall, &state, &airframe, away, 0.0);
+        assert!((v - away).length() < 1e-4, "{v}");
+        // Towards the wall at speed, braking still wins: no velocity towards it.
+        state.velocity = Vec3::new(0.0, 0.0, 1.5);
+        let along = Vec2::new(-1.0, 0.3) * 2.0;
+        let v = limit_velocity(&wall, &state, &airframe, along, 0.0);
+        assert!(v.dot(Vec2::Y) <= 1e-4 && v.x.abs() < 1e-4, "{v}");
+    }
 }

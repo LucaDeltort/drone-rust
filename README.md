@@ -218,18 +218,18 @@ masked by buildings. The raw data is in [`bench/results.csv`](bench/results.csv)
 
 | Mission | `truth` | `ekf-gps` | `ekf` |
 |---|---|---|---|
-| A → B | 24/28 | 10/28 | 11/28 |
-| Exploration, nearest frontier | 6/28 | 2/28 | 0/28 |
-| Exploration, information gain | 5/28 | 5/28 | 0/28 |
+| A → B | 25/28 | 9/28 | 11/28 |
+| Exploration, nearest frontier | 9/28 | 2/28 | 0/28 |
+| Exploration, information gain | 8/28 | 5/28 | 0/28 |
 
 ### Perfect pose (`truth`), by drone
 
 | Drone | A → B | Exploration (both strategies) | Collisions |
 |---|---|---|---|
-| Scout | 6/7 | 6/14 | 74 |
-| Pro | 6/7 | 3/14 | 8 |
-| Heavy | 6/7 | 2/14 | 42 |
-| Cheap | 6/7 | 0/14 | 0 |
+| Scout | 6/7 | 7/14 | 0 |
+| Pro | 6/7 | 8/14 | 4 |
+| Heavy | 6/7 | 2/14 | 9 |
+| Cheap | 7/7 | 0/14 | 0 |
 
 ### GPS (`ekf-gps`), by map
 
@@ -238,12 +238,12 @@ by buildings along the flights.
 
 | Map | Pose error | Sky masked |
 |---|---|---|
-| `seed42`, `seed7` | 0.46–0.50 m | 5–8 % |
-| `corridor` | 0.53 m | 10 % |
-| `suburbs` | 0.62 m | 14 % |
+| `seed42`, `seed7` | 0.47–0.49 m | 5–8 % |
+| `corridor` | 0.54 m | 10 % |
+| `suburbs` | 0.63 m | 16 % |
 | `old-town` | 2.0 m | 52 % |
-| `dense-city` | 2.2 m | 61 % |
-| `downtown` | 2.4 m | 62 % |
+| `dense-city` | 2.3 m | 60 % |
+| `downtown` | 2.5 m | 66 % |
 
 ### Pose error without GPS (`ekf`, with scan matching), by drone
 
@@ -252,36 +252,41 @@ depth camera; the Cheap only has sonars.
 
 | Drone | Pose error | A → B |
 |---|---|---|
-| Scout | 2.5 m | 5/7 |
-| Pro | 2.2 m | 5/7 |
-| Heavy | 16 m | 1/7 |
-| Cheap | 80 m | 0/7 |
+| Scout | 2.7 m | 5/7 |
+| Pro | 3.9 m | 5/7 |
+| Heavy | 26 m | 1/7 |
+| Cheap | 64 m | 0/7 |
 
 ### Takeaways
 
-- **A → B with a perfect pose holds up**: 24/28, as before the dynamics and the
+- **A → B with a perfect pose holds up**: 25/28, as before the dynamics and the
   sensor realism.
-- **Explorations mostly run out of time.** 40 of the 56 perfect-pose explorations
+- **Explorations often run out of time.** 37 of the 56 perfect-pose explorations
   end on the 1200 s limit. A drone that has to tilt to accelerate and to brake, and
   waits for its response time, flies the same paths more slowly.
   - The maps they leave are right (median 100 % of the occupied cells correct for
-    the lidar drones), and the Scout and the Pro cover 92–99 % in the median.
-  - Collisions now appear in long city explorations: one Scout run in downtown
-    counts 71 of the 74 contacts, stuck against a facade; the Heavy, wide and slow,
-    touches walls in the cities and on the hilly procedural maps.
+    the lidar and depth drones), and the Scout and the Pro cover 99 % in the median.
+  - Collisions with a perfect pose are down to 13 contacts in 4 runs (124 before two
+    fixes). Avoidance no longer holds a drone that drifts slowly into a wall: before,
+    it copied the drift and one Scout run in downtown stayed pressed against a
+    facade for 71 contacts. And the map keeps glass: a cell that returns at least one
+    optical echo for four passes holds matter, so the 70 % of beams crossing a pane
+    no longer erase it. What remains is the Heavy, with only a forward depth camera,
+    reaching the corner of a glass tower before it has seen enough of it.
 - **In the cities, the GPS is no longer enough.** With half or more of the sky
-  masked, the median pose error goes from about 0.5 m in the open to 2–2.4 m, and
-  A → B with GPS falls to 10/28: an error of two meters puts B in the wrong street.
+  masked, the median pose error goes from about 0.5 m in the open to 2–2.5 m, and
+  A → B with GPS falls to 9/28: an error of two meters puts B in the wrong street.
   In the open maps, the GPS keeps the error around half a meter.
-- **Without GPS, scan matching still holds the lidar drones to a couple of meters**
-  (2.2–2.5 m in the median), and A → B reaches 11/28, as many as with a GPS in the
+- **Without GPS, scan matching still holds the lidar drones to a few meters**
+  (2.7–3.9 m in the median), and A → B reaches 11/28, more than with a GPS in the
   cities. No exploration succeeds without GPS: an error of a meter or two is enough
   to fail the 90 % map criterion.
 - **Sonars are not enough.** With a perfect pose the Cheap never collides, but it
-  covers about a fifth of the free space; with an estimated pose it hits walls (68
-  contacts), and without GPS nor scan matching its pose drifts to tens of meters.
+  covers about a fifth of the free space. Without GPS nor scan matching its pose
+  drifts to tens of meters and it hits real walls it believes elsewhere (258 contacts
+  with an estimated pose).
 - **Compute is cheap.** One step (estimation + map + decision; the sensors are not
-  counted) takes 0.23 ms in the median and under 1 ms on average for every run.
+  counted) takes 0.26 ms in the median and at most 1.1 ms on average for a run.
 
 ## Architecture
 

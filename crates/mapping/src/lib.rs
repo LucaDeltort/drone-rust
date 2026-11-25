@@ -64,6 +64,16 @@ const HIT_GUARD_M: f32 = 0.06;
 /// Hits and free passes from which an unknown cell is ambiguous.
 const AMBIGUOUS_MIN: u16 = 3;
 
+/// A cell that returned at least this many optical echoes (lidar, depth: full-weight
+/// rays), and at least one for every `MATTER_RATIO` passes, holds matter even if most
+/// rays cross it: glass lets most beams through, and its few echoes would otherwise
+/// be outvoted and the pane erased. Passes through it then count for
+/// `MATTER_MISS_WEIGHT` only. Sonar echoes do not count: a cone marks a whole arc,
+/// mostly empty, that later passes must be able to clear.
+const MATTER_HITS: u16 = 3;
+const MATTER_RATIO: u16 = 4;
+const MATTER_MISS_WEIGHT: f32 = 0.2;
+
 /// Weight of a sonar ray relative to a lidar ray.
 const SONAR_WEIGHT: f32 = 0.3;
 /// Number of rays representing the sonar cone in the map.
@@ -80,8 +90,8 @@ pub struct OccupancyGrid {
     pub y_hi: f32,
     pub params: LogOdds,
     logodds: Vec<f32>,
-    /// Number of hits and free passes received by each cell.
-    evidence: Vec<[u16; 2]>,
+    /// Number of hits, free passes and optical (full-weight) hits received by each cell.
+    evidence: Vec<[u16; 3]>,
     /// Mean position (x, z) of the hits in each cell: where the surface really is,
     /// finer than the cell, for scan matching.
     hit_mean: Vec<Vec2>,
@@ -106,7 +116,7 @@ impl OccupancyGrid {
             y_hi,
             params: LogOdds::default(),
             logodds: vec![0.0; n * n],
-            evidence: vec![[0; 2]; n * n],
+            evidence: vec![[0; 3]; n * n],
             hit_mean: vec![Vec2::ZERO; n * n],
             bounds: None,
             miss_as_free: true,
@@ -123,7 +133,7 @@ impl OccupancyGrid {
 
     pub fn clear(&mut self) {
         self.logodds.fill(0.0);
-        self.evidence.fill([0; 2]);
+        self.evidence.fill([0; 3]);
         self.hit_mean.fill(Vec2::ZERO);
         self.bounds = None;
     }
@@ -165,7 +175,7 @@ impl OccupancyGrid {
     /// (hits and free passes): typically a hillside that the rays
     /// graze, half inside the slab. Looking at it again will teach nothing.
     pub fn ambiguous(&self, i: usize, j: usize) -> bool {
-        let [hits, misses] = self.evidence[j * self.nx + i];
+        let [hits, misses, _] = self.evidence[j * self.nx + i];
         hits >= AMBIGUOUS_MIN && misses >= AMBIGUOUS_MIN && self.cell(i, j) == Cell::Unknown
     }
 
@@ -288,7 +298,10 @@ impl OccupancyGrid {
                         t += step;
                         continue;
                     }
-                    self.add(c.0, c.1, self.params.miss * weight);
+                    let [_, misses, echoes] = self.evidence[c.1 * self.nx + c.0];
+                    let matter = echoes >= MATTER_HITS && echoes.saturating_mul(MATTER_RATIO) >= misses;
+                    let w = if matter { weight * MATTER_MISS_WEIGHT } else { weight };
+                    self.add(c.0, c.1, self.params.miss * w);
                     touched += 1;
                 }
                 t += step;
@@ -296,6 +309,10 @@ impl OccupancyGrid {
         }
         if let (Some((i, j)), Some(p)) = (hit_cell, hit_point) {
             self.add(i, j, self.params.hit * weight);
+            if weight >= 1.0 {
+                let e = &mut self.evidence[j * self.nx + i][2];
+                *e = e.saturating_add(1);
+            }
             // Mean of the hits: an established surface barely moves, so the map
             // does not follow a drifting pose.
             let k = j * self.nx + i;
