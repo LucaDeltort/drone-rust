@@ -434,10 +434,11 @@ There are about a hundred tests, for example:
 - The wind's shelter is a single upwind raycast: no flow around buildings.
 - Scan matching is scan-to-map without loop closure: an error made while
   exploring is written into the map and never undone.
-- The EKF knows the tilt exactly (it reads it from the simulation): a strapdown IMU
-  with a 15-state error-state filter, rotor drag fusion and wind estimation is on the
-  `phase5` branch, but without GPS it still loses missions the current filter wins,
-  until the scan matching is retuned for it.
+- The EKF knows the tilt exactly (it reads it from the simulation). A strapdown IMU
+  with an error-state filter estimating the tilt, with rotor drag fusion and wind
+  estimation, was tried and set aside: without GPS it lost missions the current filter
+  wins, because the scan matching, done on a map written from the same drifting
+  estimate, then confirms the drift and hides the tilt error behind it.
 - Fixed-mount 2D lidars see the ground when the drone tilts: without GPS, the Pro and
   the Mapper match fewer points and drift more than with a gimbal.
 
